@@ -803,32 +803,16 @@ input[type="range"] {
   z-index: 100;
   display: grid;
   place-items: center;
+  /* iPad で素早く書いたときにテキスト選択・コールアウトが誤発動しないようにする */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .present-overlay iframe {
   border: none;
   background: #fff;
   transform-origin: center;
-}
-
-.present-close {
-  position: fixed;
-  top: 16px;
-  right: 18px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font-size: 16px;
-  display: grid;
-  place-items: center;
-  z-index: 102;
-  transition: background 0.15s;
-}
-
-.present-close:hover {
-  background: rgba(255, 255, 255, 0.28);
 }
 
 /* プレゼン用の書き込みレイヤーとツール */
@@ -856,13 +840,24 @@ input[type="range"] {
 
 .present-tools {
   position: fixed;
-  top: 64px;
-  right: 24px;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   z-index: 102;
+  background: rgba(20, 20, 24, 0.55);
+  border-radius: 99px;
+  padding: 4px 8px;
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+
+.present-tools:hover,
+.present-tools:has(.on) {
+  opacity: 1;
 }
 
 .present-tool {
@@ -886,12 +881,18 @@ input[type="range"] {
 }
 
 .present-palette {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 6px 5px;
-  background: rgba(20, 20, 24, 0.6);
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  background: rgba(20, 20, 24, 0.75);
   border-radius: 99px;
+  white-space: nowrap;
 }
 
 .present-color {
@@ -911,39 +912,27 @@ input[type="range"] {
   transform: scale(1.15);
 }
 
-/* ペンの太さスライダー（縦向き）とプレビュー */
+/* ペンの太さスライダーとプレビュー */
 
 .present-width-sep {
-  width: 14px;
-  height: 1px;
+  width: 1px;
+  height: 16px;
   background: rgba(255, 255, 255, 0.2);
-  margin: 2px 0;
 }
 
 .present-width-preview {
   display: block;
   border-radius: 50%;
-  margin: 2px 0;
   flex-shrink: 0;
 }
 
-.present-width-wrap {
-  position: relative;
-  width: 18px;
-  height: 68px;
-}
-
 .present-width-slider {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 68px;
+  width: 76px;
   height: 18px;
   margin: 0;
   padding: 0;
   border: none;
   background: transparent;
-  transform: translate(-50%, -50%) rotate(-90deg);
 }
 
 .present-controls {
