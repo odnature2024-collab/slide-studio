@@ -342,7 +342,10 @@ input[type="number"] {
 .overlay {
   position: absolute;
   inset: 0;
-  pointer-events: none;
+  touch-action: none; /* タッチをすべて編集操作に使う */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .hover-box {

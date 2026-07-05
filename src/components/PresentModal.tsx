@@ -14,9 +14,10 @@ interface Props {
 
 const STYLE_ID = "hse-present-style";
 
-type Tool = "none" | "pointer" | "pen" | "fade";
+type Tool = "none" | "pointer" | "pen" | "fade" | "marker";
 
 const PEN_COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#0a84ff"];
+const MARKER_COLORS = ["#ffeb3b", "#b2ff59", "#ff80ab", "#40c4ff", "#ffab40"];
 
 /** 消えるペン: 手が止まってから待つ時間と、消えるのにかかる時間 */
 const FADE_IDLE_MS = 1200;
@@ -25,8 +26,14 @@ const FADE_DURATION_MS = 700;
 const PEN_WIDTH_DEFAULT = 4;
 const PEN_WIDTH_MIN = 1.5;
 const PEN_WIDTH_MAX = 12;
+/** 蛍光マーカーの太さ */
+const MARKER_WIDTH_DEFAULT = 16;
+const MARKER_WIDTH_MIN = 6;
+const MARKER_WIDTH_MAX = 40;
 /** 万年筆らしいインクの濃度（わずかに透ける） */
 const INK_ALPHA = 0.92;
+/** 蛍光マーカーの透け具合 */
+const MARKER_ALPHA = 0.38;
 
 interface InkPoint {
   x: number;
@@ -38,6 +45,8 @@ interface InkPoint {
 interface Stroke {
   color: string;
   points: InkPoint[];
+  /** marker は太さ一定・半透明の蛍光マーカー */
+  kind: "pen" | "marker";
 }
 
 /** 太さ計算に使う入力サンプル（通常イベントと coalesced イベントの両方を受ける） */
@@ -84,8 +93,38 @@ function setupInk(ctx: CanvasRenderingContext2D, color: string, effectiveAlpha: 
   ctx.lineJoin = "round";
 }
 
+/** 蛍光マーカー: 太さ一定の1本のパスとして描く（継ぎ目のムラを作らない） */
+function drawMarkerStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: Stroke,
+  effectiveAlpha: number
+): void {
+  const pts = stroke.points;
+  if (pts.length === 0) return;
+  setupInk(ctx, stroke.color, effectiveAlpha);
+  ctx.lineWidth = Math.max(1, pts[0].w);
+  ctx.beginPath();
+  if (pts.length === 1) {
+    ctx.arc(pts[0].x, pts[0].y, Math.max(1, pts[0].w) / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const m = midOf(pts[i], pts[i + 1]);
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
+    }
+    ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
 /** effectiveAlpha をそのまま使って描く（オフスクリーン合成用） */
 function drawStrokeRaw(ctx: CanvasRenderingContext2D, stroke: Stroke, effectiveAlpha: number): void {
+  if (stroke.kind === "marker") {
+    drawMarkerStroke(ctx, stroke, effectiveAlpha);
+    return;
+  }
   const pts = stroke.points;
   if (pts.length === 0) return;
   setupInk(ctx, stroke.color, effectiveAlpha);
@@ -110,7 +149,7 @@ function drawStrokeRaw(ctx: CanvasRenderingContext2D, stroke: Stroke, effectiveA
 }
 
 function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, alpha: number): void {
-  drawStrokeRaw(ctx, stroke, alpha * INK_ALPHA);
+  drawStrokeRaw(ctx, stroke, alpha * (stroke.kind === "marker" ? MARKER_ALPHA : INK_ALPHA));
 }
 
 function ToolIcon({ d, filled }: { d: string; filled?: boolean }) {
@@ -134,6 +173,8 @@ export default function PresentModal({ engine, onClose }: Props) {
   const [tool, setTool] = useState<Tool>("none");
   const [penColor, setPenColor] = useState(PEN_COLORS[0]);
   const [penWidth, setPenWidth] = useState(PEN_WIDTH_DEFAULT);
+  const [markerColor, setMarkerColor] = useState(MARKER_COLORS[0]);
+  const [markerWidth, setMarkerWidth] = useState(MARKER_WIDTH_DEFAULT);
   const [strokeVersion, setStrokeVersion] = useState(0); // クリアボタン表示の更新用
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -261,7 +302,7 @@ export default function PresentModal({ engine, onClose }: Props) {
   // iPad: 素早い連続ストロークが OS のジェスチャ判定に取られないよう、
   // ペン使用中はタッチイベントの既定動作を確実に止める（passive: false が必須）
   const penActiveTouchRef = useRef(false);
-  penActiveTouchRef.current = tool === "pen" || tool === "fade";
+  penActiveTouchRef.current = tool === "pen" || tool === "fade" || tool === "marker";
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -289,7 +330,7 @@ export default function PresentModal({ engine, onClose }: Props) {
     redrawAll();
   }, [winSize, index, redrawAll]);
 
-  const penActive = tool === "pen" || tool === "fade";
+  const penActive = tool === "pen" || tool === "fade" || tool === "marker";
 
   // ---- 万年筆の太さ計算 ----
 
@@ -321,7 +362,8 @@ export default function PresentModal({ engine, onClose }: Props) {
     const prev = pts[pts.length - 1] ?? null;
     // 近すぎる点はノイズになるので捨てる（手ブレ抑制）
     if (prev && Math.hypot(sample.x - prev.x, sample.y - prev.y) < 1.2) return;
-    pts.push({ x: sample.x, y: sample.y, w: computeInkWidth(sample, prev) });
+    const w = stroke.kind === "marker" ? markerWidth : computeInkWidth(sample, prev);
+    pts.push({ x: sample.x, y: sample.y, w });
     if (!ctx) return;
     // rAF を待たずにその場で「1点遅れ」の滑らかな曲線を描く
     const n = pts.length;
@@ -352,18 +394,25 @@ export default function PresentModal({ engine, onClose }: Props) {
       // 合成イベント等で pointerId が無効な場合は無視
     }
     inkStateRef.current = { lastT: ev.timeStamp, lastW: 0 };
-    const stroke: Stroke = { color: penColor, points: [] };
+    const isMarker = tool === "marker";
+    const stroke: Stroke = {
+      color: isMarker ? markerColor : penColor,
+      points: [],
+      kind: isMarker ? "marker" : "pen",
+    };
     drawingRef.current = stroke;
-    if (tool === "pen") {
-      const list = permStrokesRef.current.get(index) ?? [];
-      list.push(stroke);
-      permStrokesRef.current.set(index, list);
-    } else {
+    if (tool === "fade") {
       fadeStrokesRef.current.push(stroke);
       fadeActivityRef.current = performance.now();
       ensureFadeLoop(); // 描画と「手が止まった」検知はこのループが担当する
+    } else {
+      // 通常ペンと蛍光マーカーはスライドごとに保持
+      const list = permStrokesRef.current.get(index) ?? [];
+      list.push(stroke);
+      permStrokesRef.current.set(index, list);
     }
     addSample(stroke, toSample(ev.nativeEvent), null);
+    if (isMarker) redrawAll();
   };
 
   const handleDrawMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -389,6 +438,8 @@ export default function PresentModal({ engine, onClose }: Props) {
     } else {
       addSample(stroke, toSample(native), ctx);
     }
+    // マーカーは太さ一定の1本パスなので、毎回全体を描き直す（継ぎ目ムラ防止）
+    if (tool === "marker") redrawAll();
   };
 
   const handleDrawEnd = () => {
@@ -396,25 +447,34 @@ export default function PresentModal({ engine, onClose }: Props) {
     if (!stroke) return;
     drawingRef.current = null;
     const pts = stroke.points;
-    // 「シュッ」とした払い: 速い抜きなら進行方向に尻尾を伸ばす
-    if (pts.length >= 2) {
+    // 「シュッ」とした払い（マーカーは太さ一定なので対象外）
+    if (stroke.kind === "pen" && pts.length >= 2) {
       const a = pts[pts.length - 2];
       const b = pts[pts.length - 1];
       const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-      if (segLen > 5) {
-        const tailLen = Math.min(28, segLen * 1.8);
-        pts.push({
-          x: b.x + ((b.x - a.x) / segLen) * tailLen,
-          y: b.y + ((b.y - a.y) / segLen) * tailLen,
-          w: Math.max(0.5, b.w * 0.1),
-        });
+      const fastLift = segLen > 4;
+      if (fastLift) {
+        // 進行方向に減速しながら伸びる細い尻尾を、複数点でなめらかに描く
+        const ux = (b.x - a.x) / segLen;
+        const uy = (b.y - a.y) / segLen;
+        const tailLen = Math.min(34, 6 + segLen * 2.2);
+        const steps = 5;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const ease = 1 - Math.pow(1 - t, 2);
+          pts.push({
+            x: b.x + ux * tailLen * ease,
+            y: b.y + uy * tailLen * ease,
+            w: Math.max(0.25, b.w * Math.pow(1 - t, 1.6)),
+          });
+        }
       }
-    }
-    // 書き終わりを先細りに（末尾ほど細く）
-    const k = Math.min(6, pts.length);
-    for (let i = 0; i < k; i++) {
-      const p = pts[pts.length - 1 - i];
-      p.w *= Math.pow((i + 1) / (k + 1), 0.8);
+      // 末尾の先細り。速い抜きは長めに、置くように離した時は短めに絞る
+      const k = Math.min(fastLift ? 10 : 4, pts.length);
+      for (let i = 0; i < k; i++) {
+        const p = pts[pts.length - 1 - i];
+        p.w *= Math.pow((i + 1) / (k + 1), 0.9);
+      }
     }
     if (tool === "fade") {
       fadeActivityRef.current = performance.now();
@@ -523,6 +583,13 @@ export default function PresentModal({ engine, onClose }: Props) {
         >
           <ToolIcon d="M3 21l1-4L16 5l3 3L7 20l-4 1zM19 14v0.01M21 11v0.01M22 7v0.01" />
         </button>
+        <button
+          className={`present-tool ${tool === "marker" ? "on" : ""}`}
+          title="蛍光マーカー"
+          onClick={() => toggleTool("marker")}
+        >
+          <ToolIcon d="M5 21h14M8 17l7-11 4 3-7 11H8v-3zM15 6l2-2 4 3-2 2" />
+        </button>
         {hasStrokes && (
           <button
             className="present-tool"
@@ -533,37 +600,52 @@ export default function PresentModal({ engine, onClose }: Props) {
           </button>
         )}
 
-        {/* ペン選択時だけ、バーの下にパレットと太さスライダーを出す */}
-        {penActive && (
-          <div className="present-palette" onClick={(e) => e.stopPropagation()}>
-            {PEN_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`present-color ${penColor === c ? "on" : ""}`}
-                style={{ background: c }}
-                title={c}
-                onClick={() => setPenColor(c)}
-              />
-            ))}
-            <span className="present-width-sep" />
-            <input
-              type="range"
-              className="present-width-slider"
-              min={PEN_WIDTH_MIN}
-              max={PEN_WIDTH_MAX}
-              step={0.5}
-              value={penWidth}
-              title="ペンの太さ"
-              style={{ accentColor: penColor }}
-              onChange={(e) => setPenWidth(parseFloat(e.target.value))}
-            />
-            <span
-              className="present-width-preview"
-              title={`太さ: ${penWidth}px`}
-              style={{ width: penWidth + 3, height: penWidth + 3, background: penColor }}
-            />
-          </div>
-        )}
+        {/* ペン・マーカー選択時だけ、バーの下にパレットと太さスライダーを出す */}
+        {penActive &&
+          (() => {
+            const isMarker = tool === "marker";
+            const colors = isMarker ? MARKER_COLORS : PEN_COLORS;
+            const color = isMarker ? markerColor : penColor;
+            const setColor = isMarker ? setMarkerColor : setPenColor;
+            const width = isMarker ? markerWidth : penWidth;
+            const setWidth = isMarker ? setMarkerWidth : setPenWidth;
+            const previewSize = Math.min(width + 3, 22);
+            return (
+              <div className="present-palette" onClick={(e) => e.stopPropagation()}>
+                {colors.map((c) => (
+                  <button
+                    key={c}
+                    className={`present-color ${color === c ? "on" : ""}`}
+                    style={{ background: c }}
+                    title={c}
+                    onClick={() => setColor(c)}
+                  />
+                ))}
+                <span className="present-width-sep" />
+                <input
+                  type="range"
+                  className="present-width-slider"
+                  min={isMarker ? MARKER_WIDTH_MIN : PEN_WIDTH_MIN}
+                  max={isMarker ? MARKER_WIDTH_MAX : PEN_WIDTH_MAX}
+                  step={isMarker ? 1 : 0.5}
+                  value={width}
+                  title={isMarker ? "マーカーの太さ" : "ペンの太さ"}
+                  style={{ accentColor: color }}
+                  onChange={(e) => setWidth(parseFloat(e.target.value))}
+                />
+                <span
+                  className="present-width-preview"
+                  title={`太さ: ${width}px`}
+                  style={{
+                    width: previewSize,
+                    height: previewSize,
+                    background: color,
+                    opacity: isMarker ? 0.55 : 1,
+                  }}
+                />
+              </div>
+            );
+          })()}
       </div>
 
       <div className="present-controls" onClick={(e) => e.stopPropagation()}>

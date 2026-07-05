@@ -291,6 +291,38 @@ export class EditorEngine {
     return el.getBoundingClientRect();
   }
 
+  // ---- 親オーバーレイからの入力（iframe 内座標で受け取る） ----
+  // iPad の Safari では縮小 iframe にタッチが届かないため、
+  // 選択・ドラッグ等はすべて親ドキュメント側で受けてここへ流し込む。
+
+  private elementAt(x: number, y: number): Element | null {
+    return this.doc?.elementFromPoint(x, y) ?? null;
+  }
+
+  overlayPointerDown(x: number, y: number): void {
+    this.pointerDownCore(x, y, this.elementAt(x, y));
+  }
+
+  overlayPointerMove(x: number, y: number): void {
+    this.pointerMoveCore(x, y, this.elementAt(x, y));
+  }
+
+  overlayPointerUp(x: number, y: number): void {
+    this.pointerUpCore(x, y, this.elementAt(x, y));
+  }
+
+  overlayDoubleClick(x: number, y: number): void {
+    const el = this.pick(this.elementAt(x, y));
+    if (el && !this.editingEl) this.tryStartTextEdit(el);
+  }
+
+  overlayLeave(): void {
+    if (this.hovered) {
+      this.hovered = null;
+      this.onOverlay();
+    }
+  }
+
   // ---- iframe 内イベント ----
 
   private bindDocListeners(doc: Document): void {
@@ -299,9 +331,31 @@ export class EditorEngine {
     this.listenersAbort = abort;
     const opts = { signal: abort.signal };
 
-    doc.addEventListener("pointerdown", (ev) => this.handlePointerDown(ev), opts);
-    doc.addEventListener("pointermove", (ev) => this.handlePointerMove(ev), opts);
-    doc.addEventListener("pointerup", (ev) => this.handlePointerUp(ev), opts);
+    // 通常の操作は親オーバーレイ経由で入るため、iframe 内のポインタ処理が
+    // 実際に動くのは主にテキスト編集中（オーバーレイが無効のとき）だけ
+    doc.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!this.editingEl) ev.preventDefault();
+        try {
+          (ev.target as Element).setPointerCapture?.(ev.pointerId);
+        } catch {
+          // 合成イベント等で pointerId が無効な場合は無視
+        }
+        this.pointerDownCore(ev.clientX, ev.clientY, ev.target);
+      },
+      opts
+    );
+    doc.addEventListener(
+      "pointermove",
+      (ev) => this.pointerMoveCore(ev.clientX, ev.clientY, ev.target),
+      opts
+    );
+    doc.addEventListener(
+      "pointerup",
+      (ev) => this.pointerUpCore(ev.clientX, ev.clientY, ev.target),
+      opts
+    );
     doc.addEventListener("dblclick", (ev) => this.handleDblClick(ev), opts);
     doc.addEventListener("keydown", (ev) => this.handleKeyDown(ev), opts);
     doc.addEventListener(
@@ -334,20 +388,24 @@ export class EditorEngine {
     );
   }
 
-  private handlePointerDown(ev: PointerEvent): void {
+  // 以降の pointer*Core は iframe 内座標 (x, y) と、その位置の要素を受け取る。
+  // iPad の Safari は縮小表示した iframe へのタッチ入力に不具合があるため、
+  // 実際の入力は親ドキュメントのオーバーレイで受けて overlay* 経由で渡される。
+
+  private pointerDownCore(x: number, y: number, rawTarget: EventTarget | null): void {
     if (this.editingEl) {
-      if (this.editingEl.contains(ev.target as Node)) return; // テキスト編集中はそのまま
+      if (rawTarget && this.editingEl.contains(rawTarget as Node)) return; // テキスト編集中はそのまま
       this.finishEditing();
     }
-    const el = this.pick(ev.target);
+    const el = this.pick(rawTarget);
     const wasInside =
       el != null &&
       this.selected != null &&
       (this.selected === el || this.selected.contains(el));
 
     this.pointer = {
-      startX: ev.clientX,
-      startY: ev.clientY,
+      startX: x,
+      startY: y,
       moved: false,
       wasInsideSelection: wasInside,
       target: el,
@@ -358,18 +416,12 @@ export class EditorEngine {
       return;
     }
     if (!wasInside) this.select(el);
-    ev.preventDefault();
-    try {
-      (ev.target as Element).setPointerCapture?.(ev.pointerId);
-    } catch {
-      // 合成イベント等で pointerId が無効な場合は無視
-    }
   }
 
-  private handlePointerMove(ev: PointerEvent): void {
+  private pointerMoveCore(x: number, y: number, rawTarget: EventTarget | null): void {
     if (this.pointer) {
-      const dx = ev.clientX - this.pointer.startX;
-      const dy = ev.clientY - this.pointer.startY;
+      const dx = x - this.pointer.startX;
+      const dy = y - this.pointer.startY;
       if (!this.pointer.moved && Math.hypot(dx, dy) > 3) {
         this.pointer.moved = true;
         if (this.selected && this.selected !== this.activeSlide() && !this.editingEl) {
@@ -383,7 +435,7 @@ export class EditorEngine {
       return;
     }
     // ホバーハイライト
-    const el = this.pick(ev.target);
+    const el = this.pick(rawTarget);
     const next = el === this.selected ? null : el;
     if (next !== this.hovered) {
       this.hovered = next;
@@ -391,7 +443,7 @@ export class EditorEngine {
     }
   }
 
-  private handlePointerUp(ev: PointerEvent): void {
+  private pointerUpCore(x: number, y: number, rawTarget: EventTarget | null): void {
     const pointer = this.pointer;
     this.pointer = null;
     if (!pointer) return;
@@ -403,7 +455,7 @@ export class EditorEngine {
     }
     this.drag = null;
 
-    const el = this.pick(ev.target);
+    const el = this.pick(rawTarget);
 
     // ダブルタップ（タッチ用のダブルクリック相当）でテキスト編集を開始
     if (el) {
@@ -411,8 +463,8 @@ export class EditorEngine {
       const isDoubleTap =
         this.lastTap != null &&
         now - this.lastTap.t < 400 &&
-        Math.hypot(ev.clientX - this.lastTap.x, ev.clientY - this.lastTap.y) < 24;
-      this.lastTap = { t: now, x: ev.clientX, y: ev.clientY };
+        Math.hypot(x - this.lastTap.x, y - this.lastTap.y) < 24;
+      this.lastTap = { t: now, x, y };
       if (isDoubleTap && !this.editingEl && this.tryStartTextEdit(el)) return;
     }
 
@@ -616,6 +668,8 @@ export class EditorEngine {
     this.editingOriginalHtml = el.innerHTML;
     el.setAttribute("contenteditable", "true");
     (el as HTMLElement).focus();
+    // フォーカスが外れたら編集を確定（iPad ではこれが主な終了経路になる）
+    el.addEventListener("blur", () => this.finishEditing(), { once: true });
     this.select(el);
     this.onOverlay();
   }

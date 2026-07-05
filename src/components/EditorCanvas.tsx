@@ -13,6 +13,7 @@ type Handle = (typeof HANDLES)[number];
 
 export default function EditorCanvas({ engine, version }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [, setTick] = useState(0);
 
@@ -74,6 +75,12 @@ export default function EditorCanvas({ engine, version }: Props) {
     target.addEventListener("pointerup", onUp);
   };
 
+  // オーバーレイ上の座標を iframe 内座標へ変換する
+  const toLocal = (ev: { clientX: number; clientY: number }) => {
+    const rect = overlayRef.current!.getBoundingClientRect();
+    return { x: (ev.clientX - rect.left) / scale, y: (ev.clientY - rect.top) / scale };
+  };
+
   const selRect = engine.selected ? engine.getRect(engine.selected) : null;
   const hovRect =
     engine.hovered && engine.hovered !== engine.selected ? engine.getRect(engine.hovered) : null;
@@ -115,7 +122,45 @@ export default function EditorCanvas({ engine, version }: Props) {
           style={{ width: sw, height: sh }}
           onLoad={() => engine.handleIframeLoad()}
         />
-        <div className="overlay">
+        {/* 選択・ドラッグ等の入力はすべてこのオーバーレイで受ける。
+            iPad の Safari は縮小 iframe へのタッチ入力に不具合があるため、
+            iframe 内には直接触れさせない（テキスト編集中のみ通す） */}
+        <div
+          className="overlay"
+          ref={overlayRef}
+          style={{ pointerEvents: engine.editingEl ? "none" : "auto" }}
+          onPointerDown={(e) => {
+            if (e.target !== overlayRef.current) return; // ハンドルは自身で処理する
+            e.preventDefault();
+            try {
+              overlayRef.current.setPointerCapture(e.pointerId);
+            } catch {
+              // 合成イベント等で pointerId が無効な場合は無視
+            }
+            const p = toLocal(e);
+            engine.overlayPointerDown(p.x, p.y);
+          }}
+          onPointerMove={(e) => {
+            if (!engine.doc) return;
+            const p = toLocal(e);
+            engine.overlayPointerMove(p.x, p.y);
+          }}
+          onPointerUp={(e) => {
+            const p = toLocal(e);
+            engine.overlayPointerUp(p.x, p.y);
+          }}
+          onPointerLeave={() => engine.overlayLeave()}
+          onDoubleClick={(e) => {
+            const p = toLocal(e);
+            engine.overlayDoubleClick(p.x, p.y);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={async (e) => {
+            e.preventDefault();
+            const file = e.dataTransfer.files?.[0];
+            if (file && file.type.startsWith("image/")) await engine.insertImageFromFile(file);
+          }}
+        >
           {hovRect && (
             <div
               className="hover-box"
