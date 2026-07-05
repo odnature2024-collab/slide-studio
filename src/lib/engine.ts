@@ -83,6 +83,8 @@ export class EditorEngine {
   private editingOriginalHtml = "";
   private nudgeTimer: number | null = null;
   private listenersAbort: AbortController | null = null;
+  /** タッチのダブルタップ検出用（iPad ではダブルクリックが使えないため） */
+  private lastTap: { t: number; x: number; y: number } | null = null;
 
   // ---- ライフサイクル ----
 
@@ -309,6 +311,14 @@ export class EditorEngine {
       },
       opts
     );
+    // iPad: タッチ移動をスクロール等に取られないようにする（テキスト編集中を除く）
+    doc.addEventListener(
+      "touchmove",
+      (ev) => {
+        if (!this.editingEl) ev.preventDefault();
+      },
+      { signal: abort.signal, passive: false }
+    );
     // 画像ファイルのドロップで挿入
     doc.addEventListener("dragover", (ev) => ev.preventDefault(), opts);
     doc.addEventListener(
@@ -393,8 +403,20 @@ export class EditorEngine {
     }
     this.drag = null;
 
-    // クリック（移動なし）: 選択の深掘り・親への拡大
     const el = this.pick(ev.target);
+
+    // ダブルタップ（タッチ用のダブルクリック相当）でテキスト編集を開始
+    if (el) {
+      const now = performance.now();
+      const isDoubleTap =
+        this.lastTap != null &&
+        now - this.lastTap.t < 400 &&
+        Math.hypot(ev.clientX - this.lastTap.x, ev.clientY - this.lastTap.y) < 24;
+      this.lastTap = { t: now, x: ev.clientX, y: ev.clientY };
+      if (isDoubleTap && !this.editingEl && this.tryStartTextEdit(el)) return;
+    }
+
+    // クリック（移動なし）: 選択の深掘り・親への拡大
     if (!el || !this.selected || !pointer.wasInsideSelection) return;
     const active = this.activeSlide();
     if (this.selected === el) {
@@ -576,9 +598,15 @@ export class EditorEngine {
   private handleDblClick(ev: MouseEvent): void {
     const el = this.pick(ev.target);
     if (!el) return;
-    if ((el.textContent ?? "").trim() === "" && el.tagName !== "IMG") return;
-    if (el.tagName === "IMG" || el.tagName === "svg") return;
+    this.tryStartTextEdit(el);
+  }
+
+  /** テキストを持つ要素なら編集を開始する（画像・SVG は対象外） */
+  private tryStartTextEdit(el: StylableElement): boolean {
+    if ((el.textContent ?? "").trim() === "") return false;
+    if (el.tagName === "IMG" || el.tagName.toLowerCase() === "svg") return false;
     this.startEditing(el);
+    return true;
   }
 
   startEditing(el: StylableElement): void {

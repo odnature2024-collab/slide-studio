@@ -76,18 +76,19 @@ function drawInkCurve(
   ctx.stroke();
 }
 
-function setupInk(ctx: CanvasRenderingContext2D, color: string, alpha: number): void {
-  ctx.globalAlpha = alpha * INK_ALPHA;
+function setupInk(ctx: CanvasRenderingContext2D, color: string, effectiveAlpha: number): void {
+  ctx.globalAlpha = effectiveAlpha;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, alpha: number): void {
+/** effectiveAlpha をそのまま使って描く（オフスクリーン合成用） */
+function drawStrokeRaw(ctx: CanvasRenderingContext2D, stroke: Stroke, effectiveAlpha: number): void {
   const pts = stroke.points;
   if (pts.length === 0) return;
-  setupInk(ctx, stroke.color, alpha);
+  setupInk(ctx, stroke.color, effectiveAlpha);
   if (pts.length === 1) {
     // タップだけの場合は点を描く
     ctx.beginPath();
@@ -106,6 +107,10 @@ function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, alpha: number
     drawInkSegment(ctx, from, pts[pts.length - 1]);
   }
   ctx.globalAlpha = 1;
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, alpha: number): void {
+  drawStrokeRaw(ctx, stroke, alpha * INK_ALPHA);
 }
 
 function ToolIcon({ d, filled }: { d: string; filled?: boolean }) {
@@ -189,6 +194,9 @@ export default function PresentModal({ engine, onClose }: Props) {
   indexRef.current = index;
   const fadeRafRef = useRef(0);
 
+  /** 消えるペンのオフスクリーン合成用キャンバス（半透明時の継ぎ目ムラを防ぐ） */
+  const offscreenRef = useRef<HTMLCanvasElement | null>(null);
+
   /** キャンバス全体を描き直す。フェード継続中なら true を返す */
   const redrawAll = useCallback(() => {
     const canvas = canvasRef.current;
@@ -213,7 +221,26 @@ export default function PresentModal({ engine, onClose }: Props) {
         }
         alpha = 1 - t / FADE_DURATION_MS;
       }
-      for (const stroke of fadeStrokesRef.current) drawStroke(ctx, stroke, alpha);
+      // いったん不透明でオフスクリーンに描いてから全体を1枚として合成する。
+      // 線分の継ぎ目でアルファが重なって粒状に濃く見えるのを防ぐ。
+      let off = offscreenRef.current;
+      if (!off || off.width !== canvas.width || off.height !== canvas.height) {
+        off = document.createElement("canvas");
+        off.width = canvas.width;
+        off.height = canvas.height;
+        offscreenRef.current = off;
+      }
+      const offCtx = off.getContext("2d");
+      if (offCtx) {
+        offCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        offCtx.clearRect(0, 0, off.width / dpr, off.height / dpr);
+        for (const stroke of fadeStrokesRef.current) drawStrokeRaw(offCtx, stroke, 1);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = alpha * INK_ALPHA;
+        ctx.drawImage(off, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       return true;
     }
     return false;
@@ -230,6 +257,27 @@ export default function PresentModal({ engine, onClose }: Props) {
   }, [redrawAll]);
 
   useEffect(() => () => cancelAnimationFrame(fadeRafRef.current), []);
+
+  // iPad: 素早い連続ストロークが OS のジェスチャ判定に取られないよう、
+  // ペン使用中はタッチイベントの既定動作を確実に止める（passive: false が必須）
+  const penActiveTouchRef = useRef(false);
+  penActiveTouchRef.current = tool === "pen" || tool === "fade";
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const prevent = (e: TouchEvent) => {
+      if (penActiveTouchRef.current) e.preventDefault();
+    };
+    const opts: AddEventListenerOptions = { passive: false };
+    canvas.addEventListener("touchstart", prevent, opts);
+    canvas.addEventListener("touchmove", prevent, opts);
+    canvas.addEventListener("touchend", prevent, opts);
+    return () => {
+      canvas.removeEventListener("touchstart", prevent);
+      canvas.removeEventListener("touchmove", prevent);
+      canvas.removeEventListener("touchend", prevent);
+    };
+  }, []);
 
   // キャンバスサイズの設定と、スライド切替時の描き直し
   useEffect(() => {
@@ -313,13 +361,7 @@ export default function PresentModal({ engine, onClose }: Props) {
     } else {
       fadeStrokesRef.current.push(stroke);
       fadeActivityRef.current = performance.now();
-      ensureFadeLoop(); // 手が止まったことを検知するための監視を開始
-    }
-    const ctx = canvasRef.current?.getContext("2d");
-    if (ctx) {
-      const dpr = window.devicePixelRatio || 1;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      setupInk(ctx, stroke.color, 1);
+      ensureFadeLoop(); // 描画と「手が止まった」検知はこのループが担当する
     }
     addSample(stroke, toSample(ev.nativeEvent), null);
   };
@@ -329,11 +371,15 @@ export default function PresentModal({ engine, onClose }: Props) {
     if (!stroke) return;
     ev.preventDefault();
     if (tool === "fade") fadeActivityRef.current = performance.now();
-    const ctx = canvasRef.current?.getContext("2d") ?? null;
-    if (ctx) {
-      const dpr = window.devicePixelRatio || 1;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      setupInk(ctx, stroke.color, 1);
+    // 通常ペンはその場で追いつき描画。消えるペンは rAF ループが毎フレーム描き直す
+    let ctx: CanvasRenderingContext2D | null = null;
+    if (tool === "pen") {
+      ctx = canvasRef.current?.getContext("2d") ?? null;
+      if (ctx) {
+        const dpr = window.devicePixelRatio || 1;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        setupInk(ctx, stroke.color, INK_ALPHA);
+      }
     }
     // coalesced イベントで高解像度サンプリング（iPad の Apple Pencil は特に効く）
     const native = ev.nativeEvent;

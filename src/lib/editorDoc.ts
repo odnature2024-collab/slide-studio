@@ -31,6 +31,13 @@ export function injectEditorStyle(doc: Document): void {
 [${CHROME_ATTR}] { display: none !important; }
 [${SLIDE_ATTR}]:not([${HIDDEN_ATTR}]) { opacity: 1 !important; visibility: visible !important; }
 html, body { overflow: hidden !important; margin: 0 !important; }
+/* iPad: タッチをスクロール等のジェスチャに取られず、選択・ドラッグ操作に使う */
+html, body { touch-action: none !important; }
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+[contenteditable="true"], [contenteditable="true"] * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
 ${INSTANT_ANIMATION_CSS}
 body { cursor: default; }
 [${SELECTED_ATTR}] { cursor: move; }
