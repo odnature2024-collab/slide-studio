@@ -184,6 +184,12 @@ export default function PresentModal({ engine, onClose }: Props) {
   /** 消えるペンを最後に動かした時刻。ここから1.2秒止まるとフェード開始 */
   const fadeActivityRef = useRef(0);
   const drawingRef = useRef<Stroke | null>(null);
+  /** 描画中のポインタ ID（パームや他の指のイベントを混ぜないため） */
+  const drawingPointerIdRef = useRef<number | null>(null);
+  /** Apple Pencil を一度でも使ったか。使った後は「指タップ＝ページ送り」に切り替える */
+  const pencilSeenRef = useRef(false);
+  /** ページ送り候補の指タップ（動いたら無効化） */
+  const fingerTapRef = useRef<{ x: number; y: number; t: number } | null>(null);
   /** 速度から太さを滑らかに求めるための、直前の状態 */
   const inkStateRef = useRef({ lastT: 0, lastW: 0 });
   const total = engine.slides.length;
@@ -387,12 +393,20 @@ export default function PresentModal({ engine, onClose }: Props) {
 
   const handleDrawStart = (ev: React.PointerEvent<HTMLCanvasElement>) => {
     if (!penActive) return;
+    if (ev.pointerType === "pen") pencilSeenRef.current = true;
+    // Apple Pencil を使い始めた後は、指のタップはページ送りとして扱う
+    if (ev.pointerType === "touch" && pencilSeenRef.current) {
+      fingerTapRef.current = { x: ev.clientX, y: ev.clientY, t: performance.now() };
+      return;
+    }
+    if (drawingRef.current) return; // 別のポインタで描画中（パーム等）は無視
     ev.preventDefault();
     try {
       ev.currentTarget.setPointerCapture(ev.pointerId);
     } catch {
       // 合成イベント等で pointerId が無効な場合は無視
     }
+    drawingPointerIdRef.current = ev.pointerId;
     inkStateRef.current = { lastT: ev.timeStamp, lastW: 0 };
     const isMarker = tool === "marker";
     const stroke: Stroke = {
@@ -416,8 +430,15 @@ export default function PresentModal({ engine, onClose }: Props) {
   };
 
   const handleDrawMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    // ページ送り候補の指が動いた場合はタップ扱いをやめる（パームレスト等）
+    if (fingerTapRef.current && ev.pointerType === "touch") {
+      const ft = fingerTapRef.current;
+      if (Math.hypot(ev.clientX - ft.x, ev.clientY - ft.y) > 12) fingerTapRef.current = null;
+    }
     const stroke = drawingRef.current;
     if (!stroke) return;
+    // 描画中のポインタ以外（パーム・他の指）は線に混ぜない
+    if (drawingPointerIdRef.current != null && ev.pointerId !== drawingPointerIdRef.current) return;
     ev.preventDefault();
     if (tool === "fade") fadeActivityRef.current = performance.now();
     // 通常ペンはその場で追いつき描画。消えるペンは rAF ループが毎フレーム描き直す
@@ -442,7 +463,26 @@ export default function PresentModal({ engine, onClose }: Props) {
     if (tool === "marker") redrawAll();
   };
 
-  const handleDrawEnd = () => {
+  const handleDrawEnd = (ev?: React.PointerEvent<HTMLCanvasElement>) => {
+    // Apple Pencil 使用後の指タップ: 右半分で次へ、左半分で前へ
+    if (ev && ev.pointerType === "touch" && fingerTapRef.current) {
+      const tap = fingerTapRef.current;
+      fingerTapRef.current = null;
+      if (performance.now() - tap.t < 350) {
+        if (ev.clientX >= winSize.w / 2) setIndex((i) => Math.min(total - 1, i + 1));
+        else setIndex((i) => Math.max(0, i - 1));
+      }
+      return;
+    }
+    // 描画中のポインタ以外の離脱は無視
+    if (
+      ev &&
+      drawingPointerIdRef.current != null &&
+      ev.pointerId !== drawingPointerIdRef.current
+    ) {
+      return;
+    }
+    drawingPointerIdRef.current = null;
     const stroke = drawingRef.current;
     if (!stroke) return;
     drawingRef.current = null;
