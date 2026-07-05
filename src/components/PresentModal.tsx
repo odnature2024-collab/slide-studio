@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
 import { injectStyleIntoHtml, onlySlideCss } from "../lib/editorDoc";
+import { recognizeShape } from "../lib/shapeRecognizer";
 
 interface Props {
   engine: EditorEngine;
@@ -14,7 +15,11 @@ interface Props {
 
 const STYLE_ID = "hse-present-style";
 
-type Tool = "none" | "pointer" | "pen" | "fade" | "marker";
+type Tool = "none" | "pointer" | "pen" | "fade" | "marker" | "fadeMarker";
+
+/** 図形スナップ: ペンを止めたまま押し続けると図形に整形されるまでの時間と許容ブレ */
+const SHAPE_HOLD_MS = 650;
+const SHAPE_HOLD_RADIUS = 7;
 
 const PEN_COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#0a84ff"];
 const MARKER_COLORS = ["#ffeb3b", "#b2ff59", "#ff80ab", "#40c4ff", "#ffab40"];
@@ -47,6 +52,8 @@ interface Stroke {
   points: InkPoint[];
   /** marker は太さ一定・半透明の蛍光マーカー */
   kind: "pen" | "marker";
+  /** ホールドで図形にスナップ済み（以降の移動と払いを無効化） */
+  snapped?: boolean;
 }
 
 /** 太さ計算に使う入力サンプル（通常イベントと coalesced イベントの両方を受ける） */
@@ -190,6 +197,9 @@ export default function PresentModal({ engine, onClose }: Props) {
   const pencilSeenRef = useRef(false);
   /** ページ送り候補の指タップ（動いたら無効化） */
   const fingerTapRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  /** 図形スナップ用: ペンが止まっているかの監視 */
+  const holdAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const holdTimerRef = useRef<number | null>(null);
   /** 速度から太さを滑らかに求めるための、直前の状態 */
   const inkStateRef = useRef({ lastT: 0, lastW: 0 });
   const total = engine.slides.length;
@@ -258,7 +268,10 @@ export default function PresentModal({ engine, onClose }: Props) {
     // 消えるペン: 書いている間・手が止まって 1.2 秒までは全部残し、
     // その後は全ストロークが一緒にふわっと消える
     if (fadeStrokesRef.current.length > 0) {
-      const idle = performance.now() - fadeActivityRef.current;
+      // 描画中（図形スナップのホールド中を含む）はフェードさせない
+      const stillDrawingFade =
+        drawingRef.current != null && fadeStrokesRef.current.includes(drawingRef.current);
+      const idle = stillDrawingFade ? 0 : performance.now() - fadeActivityRef.current;
       let alpha = 1;
       if (idle > FADE_IDLE_MS) {
         const t = idle - FADE_IDLE_MS;
@@ -308,7 +321,8 @@ export default function PresentModal({ engine, onClose }: Props) {
   // iPad: 素早い連続ストロークが OS のジェスチャ判定に取られないよう、
   // ペン使用中はタッチイベントの既定動作を確実に止める（passive: false が必須）
   const penActiveTouchRef = useRef(false);
-  penActiveTouchRef.current = tool === "pen" || tool === "fade" || tool === "marker";
+  penActiveTouchRef.current =
+    tool === "pen" || tool === "fade" || tool === "marker" || tool === "fadeMarker";
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -336,7 +350,8 @@ export default function PresentModal({ engine, onClose }: Props) {
     redrawAll();
   }, [winSize, index, redrawAll]);
 
-  const penActive = tool === "pen" || tool === "fade" || tool === "marker";
+  const penActive =
+    tool === "pen" || tool === "fade" || tool === "marker" || tool === "fadeMarker";
 
   // ---- 万年筆の太さ計算 ----
 
@@ -389,6 +404,47 @@ export default function PresentModal({ engine, onClose }: Props) {
     pointerType: ev.pointerType,
   });
 
+  // ---- 図形スナップ（GoodNotes 風: 書いたままペンを止めて待つと整形） ----
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current != null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  };
+
+  const trySnapShape = () => {
+    const stroke = drawingRef.current;
+    if (!stroke || stroke.snapped || stroke.points.length < 8) return;
+    const shape = recognizeShape(stroke.points);
+    if (!shape) return;
+    // 図形は均一な太さが美しいので、元ストロークの中央値の太さで引き直す
+    let w: number;
+    if (stroke.kind === "marker") {
+      w = stroke.points[0]?.w ?? markerWidth;
+    } else {
+      const widths = stroke.points.map((p) => p.w).sort((a, b) => a - b);
+      w = Math.max(1, widths[Math.floor(widths.length / 2)] ?? penWidth);
+    }
+    stroke.points = shape.map((p) => ({ x: p.x, y: p.y, w }));
+    stroke.snapped = true;
+    redrawAll();
+  };
+
+  /** ペン先が動いたらホールド計測をやり直す */
+  const resetHold = (x: number, y: number) => {
+    holdAnchorRef.current = { x, y };
+    clearHoldTimer();
+    holdTimerRef.current = window.setTimeout(trySnapShape, SHAPE_HOLD_MS);
+  };
+
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
+    },
+    []
+  );
+
   // ---- 描画イベント ----
 
   const handleDrawStart = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -408,14 +464,15 @@ export default function PresentModal({ engine, onClose }: Props) {
     }
     drawingPointerIdRef.current = ev.pointerId;
     inkStateRef.current = { lastT: ev.timeStamp, lastW: 0 };
-    const isMarker = tool === "marker";
+    const isMarker = tool === "marker" || tool === "fadeMarker";
+    const isFade = tool === "fade" || tool === "fadeMarker";
     const stroke: Stroke = {
       color: isMarker ? markerColor : penColor,
       points: [],
       kind: isMarker ? "marker" : "pen",
     };
     drawingRef.current = stroke;
-    if (tool === "fade") {
+    if (isFade) {
       fadeStrokesRef.current.push(stroke);
       fadeActivityRef.current = performance.now();
       ensureFadeLoop(); // 描画と「手が止まった」検知はこのループが担当する
@@ -426,7 +483,8 @@ export default function PresentModal({ engine, onClose }: Props) {
       permStrokesRef.current.set(index, list);
     }
     addSample(stroke, toSample(ev.nativeEvent), null);
-    if (isMarker) redrawAll();
+    if (tool === "marker") redrawAll();
+    resetHold(ev.clientX, ev.clientY);
   };
 
   const handleDrawMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -440,7 +498,13 @@ export default function PresentModal({ engine, onClose }: Props) {
     // 描画中のポインタ以外（パーム・他の指）は線に混ぜない
     if (drawingPointerIdRef.current != null && ev.pointerId !== drawingPointerIdRef.current) return;
     ev.preventDefault();
-    if (tool === "fade") fadeActivityRef.current = performance.now();
+    if (stroke.snapped) return; // 図形スナップ後はペンを離すまで固定
+    if (tool === "fade" || tool === "fadeMarker") fadeActivityRef.current = performance.now();
+    // ペン先が一定以上動いたらホールド計測をやり直す
+    const anchor = holdAnchorRef.current;
+    if (!anchor || Math.hypot(ev.clientX - anchor.x, ev.clientY - anchor.y) > SHAPE_HOLD_RADIUS) {
+      resetHold(ev.clientX, ev.clientY);
+    }
     // 通常ペンはその場で追いつき描画。消えるペンは rAF ループが毎フレーム描き直す
     let ctx: CanvasRenderingContext2D | null = null;
     if (tool === "pen") {
@@ -483,12 +547,14 @@ export default function PresentModal({ engine, onClose }: Props) {
       return;
     }
     drawingPointerIdRef.current = null;
+    clearHoldTimer();
+    holdAnchorRef.current = null;
     const stroke = drawingRef.current;
     if (!stroke) return;
     drawingRef.current = null;
     const pts = stroke.points;
-    // 「シュッ」とした払い（マーカーは太さ一定なので対象外）
-    if (stroke.kind === "pen" && pts.length >= 2) {
+    // 「シュッ」とした払い（マーカーとスナップ済み図形は対象外）
+    if (stroke.kind === "pen" && !stroke.snapped && pts.length >= 2) {
       const a = pts[pts.length - 2];
       const b = pts[pts.length - 1];
       const segLen = Math.hypot(b.x - a.x, b.y - a.y);
@@ -516,7 +582,7 @@ export default function PresentModal({ engine, onClose }: Props) {
         p.w *= Math.pow((i + 1) / (k + 1), 0.9);
       }
     }
-    if (tool === "fade") {
+    if (tool === "fade" || tool === "fadeMarker") {
       fadeActivityRef.current = performance.now();
       ensureFadeLoop();
     }
@@ -630,6 +696,13 @@ export default function PresentModal({ engine, onClose }: Props) {
         >
           <ToolIcon d="M5 21h14M8 17l7-11 4 3-7 11H8v-3zM15 6l2-2 4 3-2 2" />
         </button>
+        <button
+          className={`present-tool ${tool === "fadeMarker" ? "on" : ""}`}
+          title="自動で消える蛍光マーカー（手を止めると1.2秒後にふわっと消えます）"
+          onClick={() => toggleTool("fadeMarker")}
+        >
+          <ToolIcon d="M4 21h9M7 17l6-9 4 3-6 9H7v-3zM18 15v.01M20 12v.01M21 8v.01" />
+        </button>
         {hasStrokes && (
           <button
             className="present-tool"
@@ -643,7 +716,7 @@ export default function PresentModal({ engine, onClose }: Props) {
         {/* ペン・マーカー選択時だけ、バーの下にパレットと太さスライダーを出す */}
         {penActive &&
           (() => {
-            const isMarker = tool === "marker";
+            const isMarker = tool === "marker" || tool === "fadeMarker";
             const colors = isMarker ? MARKER_COLORS : PEN_COLORS;
             const color = isMarker ? markerColor : penColor;
             const setColor = isMarker ? setMarkerColor : setPenColor;
