@@ -1,0 +1,184 @@
+// 中央キャンバス：スケーリングされた iframe と選択オーバーレイ（選択枠・リサイズハンドル）
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { EditorEngine } from "../lib/engine";
+
+interface Props {
+  engine: EditorEngine;
+  version: number;
+}
+
+const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
+type Handle = (typeof HANDLES)[number];
+
+export default function EditorCanvas({ engine, version }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  const [, setTick] = useState(0);
+
+  // ドラッグ・ホバー等の一時的な更新はキャンバスだけ再描画する
+  useEffect(() => {
+    engine.onOverlay = () => setTick((t) => t + 1);
+    return () => {
+      engine.onOverlay = () => {};
+    };
+  }, [engine]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      setContainerSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const { width: sw, height: sh } = engine.slideSize;
+  const margin = 56;
+  const scale = Math.max(
+    0.05,
+    Math.min((containerSize.w - margin) / sw, (containerSize.h - margin) / sh)
+  );
+  const stageLeft = Math.max(margin / 2, (containerSize.w - sw * scale) / 2);
+  const stageTop = Math.max(margin / 2, (containerSize.h - sh * scale) / 2);
+
+  const iframeRef = useCallback(
+    (node: HTMLIFrameElement | null) => engine.attachIframe(node),
+    [engine]
+  );
+
+  // リサイズハンドルのドラッグ
+  const handleResizeStart = (handle: Handle, ev: React.PointerEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!engine.beginResize()) return;
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    const target = ev.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(ev.pointerId);
+    } catch {
+      // 合成イベント等で pointerId が無効な場合は無視
+    }
+
+    const onMove = (e: PointerEvent) => {
+      engine.applyResize(handle, (e.clientX - startX) / scale, (e.clientY - startY) / scale, e.shiftKey);
+    };
+    const onUp = () => {
+      engine.endResize();
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+  };
+
+  const selRect = engine.selected ? engine.getRect(engine.selected) : null;
+  const hovRect =
+    engine.hovered && engine.hovered !== engine.selected ? engine.getRect(engine.hovered) : null;
+  const isSlideSelected = engine.selected === engine.activeSlide();
+  const handleSize = 9 / scale;
+
+  const selectedLabel = engine.selected
+    ? `${engine.selected.tagName.toLowerCase()}${
+        engine.selected.classList[0] ? `.${engine.selected.classList[0]}` : ""
+      }`
+    : "";
+
+  return (
+    <div
+      ref={containerRef}
+      className="canvas"
+      onPointerDown={(e) => {
+        // iframe の外側（余白）をクリックしたら選択解除
+        if (e.target === containerRef.current) {
+          engine.finishEditing();
+          engine.select(null);
+        }
+      }}
+    >
+      <div
+        className="canvas-stage"
+        style={{
+          left: stageLeft,
+          top: stageTop,
+          width: sw,
+          height: sh,
+          transform: `scale(${scale})`,
+        }}
+      >
+        <iframe
+          ref={iframeRef}
+          title="スライド編集キャンバス"
+          sandbox="allow-same-origin"
+          style={{ width: sw, height: sh }}
+          onLoad={() => engine.handleIframeLoad()}
+        />
+        <div className="overlay">
+          {hovRect && (
+            <div
+              className="hover-box"
+              style={{
+                left: hovRect.left,
+                top: hovRect.top,
+                width: hovRect.width,
+                height: hovRect.height,
+              }}
+            />
+          )}
+          {selRect && (
+            <>
+              <div
+                className="select-box"
+                style={{
+                  left: selRect.left,
+                  top: selRect.top,
+                  width: selRect.width,
+                  height: selRect.height,
+                }}
+              />
+              <div
+                className="select-label"
+                style={{ left: selRect.left, top: selRect.top, fontSize: 10 / scale }}
+              >
+                {selectedLabel}
+              </div>
+              {!isSlideSelected &&
+                !engine.editingEl &&
+                HANDLES.map((h) => {
+                  const cx = h.includes("w")
+                    ? selRect.left
+                    : h.includes("e")
+                      ? selRect.left + selRect.width
+                      : selRect.left + selRect.width / 2;
+                  const cy = h.includes("n")
+                    ? selRect.top
+                    : h.includes("s")
+                      ? selRect.top + selRect.height
+                      : selRect.top + selRect.height / 2;
+                  return (
+                    <div
+                      key={h}
+                      className={`handle ${h}`}
+                      style={{
+                        left: cx - handleSize / 2,
+                        top: cy - handleSize / 2,
+                        width: handleSize,
+                        height: handleSize,
+                        borderWidth: 1.5 / scale,
+                      }}
+                      onPointerDown={(e) => handleResizeStart(h, e)}
+                    />
+                  );
+                })}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="canvas-hint">
+        クリックで選択 ／ ダブルクリックで文字編集 ／ ドラッグで移動 ／ ⌘Z で元に戻す
+      </div>
+    </div>
+  );
+}
