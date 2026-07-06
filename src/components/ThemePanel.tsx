@@ -71,6 +71,7 @@ export default function ThemePanel({ engine, version, mergedPalette }: Props) {
     replaceColorEverywhere(engine.doc, targets, newHex);
     liveTargetsRef.current.delete(originHex);
     engine.recordThemeOp(members, newHex);
+    engine.markColorsChanged();
     engine.commit();
   };
 
@@ -90,7 +91,10 @@ export default function ThemePanel({ engine, version, mergedPalette }: Props) {
         }
       }
     }
-    if (changed > 0) engine.commit();
+    if (changed > 0) {
+      engine.markColorsChanged();
+      engine.commit();
+    }
   };
 
   if (!engine.loaded) {

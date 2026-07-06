@@ -28,15 +28,17 @@ interface PointerState {
   target: StylableElement | null;
 }
 
-interface TransformBase {
-  baseTransform: string;
+/** 移動の基準オフセット。CSS の transform ではなく独立した translate プロパティを使う。
+ *  （デッキの登場アニメーションが transform を固定していても競合しないため、
+ *   「アニメ付きの要素が動かせない」問題を根本回避できる） */
+interface TranslateBase {
   baseDx: number;
   baseDy: number;
 }
 
 /** ドラッグ中の対象（複数選択ではすべての要素をまとめて動かす） */
 interface DragState {
-  items: Array<{ el: StylableElement; base: TransformBase }>;
+  items: Array<{ el: StylableElement; base: TranslateBase }>;
 }
 
 export type AlignCommand = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
@@ -44,7 +46,6 @@ export type AlignCommand = "left" | "hcenter" | "right" | "top" | "vcenter" | "b
 export interface ResizeStart {
   width: number;
   height: number;
-  baseTransform: string;
   baseDx: number;
   baseDy: number;
   /** 角ハンドルで文字サイズを連動スケールさせる（テキストを含む要素） */
@@ -80,6 +81,10 @@ export class EditorEngine {
   loaded = false;
   /** テーマ（色の一括置換）の操作記録。「初期値に戻す」で逆順に巻き戻す */
   themeOps: Array<{ targets: string[]; newHex: string }> = [];
+  /** 色が変わった編集の通し番号。パレット再抽出はこれが増えた時だけ行う
+   *  （移動・リサイズ・角丸など色に無関係な編集では再抽出しない＝軽量化） */
+  colorEpoch = 0;
+  private colorsDirty = false;
 
   /** 構造的な変更（履歴・パネル更新が必要）の通知 */
   onUpdate: () => void = () => {};
@@ -114,6 +119,7 @@ export class EditorEngine {
     this.dirty = false;
     this.loaded = true;
     this.themeOps = [];
+    this.colorEpoch++; // 新しい文書のパレットを1回抽出させる
     this.isInitialLoad = true;
     this.writeToIframe(file.text);
     this.onUpdate();
@@ -184,10 +190,20 @@ export class EditorEngine {
   commit(): void {
     if (!this.doc) return;
     this.dirty = true;
+    // 色に関わる編集があったときだけパレット再抽出の合図を出す
+    if (this.colorsDirty) {
+      this.colorEpoch++;
+      this.colorsDirty = false;
+    }
     // クラス変更やスタイル書き換えで再始動したアニメーションを完了状態にする
     finishAllAnimations(this.doc);
     this.history.push(this.serialize());
     this.onUpdate();
+  }
+
+  /** 次の commit で色パレットを再抽出させる（色・背景・図形・テキスト等の変更時に呼ぶ） */
+  markColorsChanged(): void {
+    this.colorsDirty = true;
   }
 
   undo(): void {
@@ -202,6 +218,8 @@ export class EditorEngine {
 
   private restore(html: string): void {
     this.dirty = true;
+    // undo/redo は色が変わっている可能性があるのでパレットを取り直す
+    this.colorEpoch++;
     this.writeToIframe(html); // onLoad で再初期化される
   }
 
@@ -507,7 +525,7 @@ export class EditorEngine {
         const movable = this.movableSelection();
         if (movable.length > 0 && !this.editingEl) {
           this.drag = {
-            items: movable.map((el) => ({ el, base: this.captureTransformBase(el) })),
+            items: movable.map((el) => ({ el, base: this.captureTranslateBase(el) })),
           };
         }
       }
@@ -568,38 +586,32 @@ export class EditorEngine {
 
   // ---- ドラッグ移動（transform: translate 方式） ----
 
-  private captureTransformBase(el: StylableElement): TransformBase {
+  private captureTranslateBase(el: StylableElement): TranslateBase {
     const ds = (el as HTMLElement).dataset;
-    if (ds.hseBase == null) {
+    if (ds.hseTx == null) {
       const cs = this.getComputed(el);
-      // インライン要素（span 等）には transform が効かないため、
+      // インライン要素（span 等）には translate が効かないため、
       // 見た目を変えない inline-block に昇格させて動かせるようにする
-      if (cs && cs.display === "inline") el.style.display = "inline-block";
-      // スタイルシート由来の transform（回転など）をインライン上書きで
-      // 消してしまわないよう、算出値を基準として引き継ぐ
-      const styleTransform = el.style.transform;
-      const computedTransform = cs && cs.transform !== "none" ? cs.transform : "";
-      ds.hseBase = styleTransform || computedTransform;
-      ds.hseDx = "0";
-      ds.hseDy = "0";
+      if (cs && cs.display === "inline") {
+        el.style.display = "inline-block";
+        ds.hseDisp = "1";
+      }
+      // 元 HTML が既に translate プロパティを持っていればそれを基準に引き継ぐ
+      const [x, y] = parseTranslate(el.style.translate);
+      ds.hseTx = String(x);
+      ds.hseTy = String(y);
     }
-    return {
-      baseTransform: ds.hseBase,
-      baseDx: parseFloat(ds.hseDx || "0"),
-      baseDy: parseFloat(ds.hseDy || "0"),
-    };
+    return { baseDx: parseFloat(ds.hseTx || "0"), baseDy: parseFloat(ds.hseTy || "0") };
   }
 
-  private applyTranslate(el: StylableElement, base: TransformBase, dx: number, dy: number): void {
+  private applyTranslate(el: StylableElement, base: TranslateBase, dx: number, dy: number): void {
     const nx = base.baseDx + dx;
     const ny = base.baseDy + dy;
     const ds = (el as HTMLElement).dataset;
-    ds.hseDx = String(nx);
-    ds.hseDy = String(ny);
-    const translate = `translate(${Math.round(nx)}px, ${Math.round(ny)}px)`;
-    el.style.transform = base.baseTransform
-      ? `${base.baseTransform} ${translate}`
-      : translate;
+    ds.hseTx = String(nx);
+    ds.hseTy = String(ny);
+    // transform とは独立した translate プロパティ（アニメーションと競合しない）
+    el.style.translate = `${Math.round(nx)}px ${Math.round(ny)}px`;
   }
 
   /** 矢印キーでの微移動 */
@@ -607,7 +619,7 @@ export class EditorEngine {
     const els = this.movableSelection();
     if (els.length === 0) return;
     for (const el of els) {
-      const base = this.captureTransformBase(el);
+      const base = this.captureTranslateBase(el);
       this.applyTranslate(el, base, dx, dy);
     }
     this.onOverlay();
@@ -623,16 +635,11 @@ export class EditorEngine {
     if (this.selection.length === 0) return;
     for (const el of this.selection) {
       const ds = (el as HTMLElement).dataset;
-      const base = ds.hseBase;
-      if (base != null) {
-        if (base) el.style.transform = base;
-        else el.style.removeProperty("transform");
-        delete ds.hseBase;
-        delete ds.hseDx;
-        delete ds.hseDy;
-      } else {
-        el.style.removeProperty("transform");
-      }
+      el.style.removeProperty("translate");
+      if (ds.hseDisp) el.style.removeProperty("display"); // inline-block 昇格を戻す
+      delete ds.hseTx;
+      delete ds.hseTy;
+      delete ds.hseDisp;
     }
     this.commit();
   }
@@ -701,7 +708,7 @@ export class EditorEngine {
       dx = Math.round(dx);
       dy = Math.round(dy);
       if (dx === 0 && dy === 0) continue;
-      const base = this.captureTransformBase(el);
+      const base = this.captureTranslateBase(el);
       this.applyTranslate(el, base, dx, dy);
     }
     this.commit();
@@ -714,7 +721,7 @@ export class EditorEngine {
     const el = this.selected;
     if (!el || el === this.activeSlide()) return null;
     const rect = el.getBoundingClientRect();
-    const base = this.captureTransformBase(el);
+    const base = this.captureTranslateBase(el);
     const isImage = ["IMG", "VIDEO", "CANVAS", "SVG", "svg", "PICTURE"].includes(el.tagName);
     // テキストを含む要素は、角ハンドルで文字サイズを連動スケールさせる（Canva 方式）
     const fontScale = !isImage && (el.textContent ?? "").trim().length > 0;
@@ -731,7 +738,6 @@ export class EditorEngine {
     this.resizeStart = {
       width: rect.width,
       height: rect.height,
-      baseTransform: base.baseTransform,
       baseDx: base.baseDx,
       baseDy: base.baseDy,
       fontScale,
@@ -746,10 +752,9 @@ export class EditorEngine {
     const ds = (el as HTMLElement).dataset;
     const nx = start.baseDx + shiftX;
     const ny = start.baseDy + shiftY;
-    ds.hseDx = String(nx);
-    ds.hseDy = String(ny);
-    const translate = `translate(${Math.round(nx)}px, ${Math.round(ny)}px)`;
-    el.style.transform = start.baseTransform ? `${start.baseTransform} ${translate}` : translate;
+    ds.hseTx = String(nx);
+    ds.hseTy = String(ny);
+    el.style.translate = `${Math.round(nx)}px ${Math.round(ny)}px`;
   }
 
   applyResize(handle: string, dx: number, dy: number, keepRatio: boolean): void {
@@ -916,6 +921,7 @@ export class EditorEngine {
   /** 確定（履歴に積む） */
   applyStyle(prop: string, value: string | null): void {
     this.applyStyleTransient(prop, value);
+    if (/color|background|fill|stroke|shadow|gradient/i.test(prop)) this.markColorsChanged();
     this.commit();
   }
 
@@ -956,6 +962,7 @@ export class EditorEngine {
       replaceColorEverywhere(this.doc, [op.newHex], op.targets[0]);
     }
     this.themeOps = [];
+    this.markColorsChanged();
     this.commit();
   }
 
@@ -982,6 +989,7 @@ export class EditorEngine {
     img.style.height = "auto";
     slide.appendChild(img);
     this.select(img);
+    this.markColorsChanged();
     this.commit();
   }
 
@@ -1022,7 +1030,25 @@ export class EditorEngine {
     svg.innerHTML = innerSvg;
     slide.appendChild(svg);
     this.select(svg);
+    this.markColorsChanged(); // 図形の色をパレットに反映
     this.commit();
+  }
+
+  /** 図形（SVG）内の rect に角丸（rx/ry）を設定する。0 で角丸なし */
+  setShapeRadius(px: number): void {
+    const el = this.selected;
+    if (!el || el.tagName.toLowerCase() !== "svg") return;
+    const rects = el.querySelectorAll("rect");
+    for (const rect of Array.from(rects)) {
+      if (px > 0) {
+        rect.setAttribute("rx", String(px));
+        rect.setAttribute("ry", String(px));
+      } else {
+        rect.removeAttribute("rx");
+        rect.removeAttribute("ry");
+      }
+    }
+    this.onOverlay();
   }
 }
 
@@ -1033,4 +1059,13 @@ function readAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+/** CSS translate プロパティ値（"" | "none" | "10px 5px" | "10px"）を [x, y] に解釈する */
+function parseTranslate(value: string): [number, number] {
+  if (!value || value === "none") return [0, 0];
+  const parts = value.trim().split(/\s+/);
+  const x = parseFloat(parts[0]) || 0;
+  const y = parts[1] != null ? parseFloat(parts[1]) || 0 : 0;
+  return [x, y];
 }

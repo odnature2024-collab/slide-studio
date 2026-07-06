@@ -10,6 +10,7 @@ import {
   extractUsedFonts,
 } from "../lib/fonts";
 import ColorField from "./ColorField";
+import SmoothSlider from "./SmoothSlider";
 
 interface Props {
   engine: EditorEngine;
@@ -72,6 +73,9 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
         (n) => n.getAttribute("stroke") !== "none"
       )
     : [];
+  const shapeRect = isShape ? el!.querySelector("rect") : null;
+  const shapeHasRect = shapeRect != null;
+  const shapeRectRadius = shapeRect ? Math.round(parseFloat(shapeRect.getAttribute("rx") || "0")) : 0;
   const computed = el ? engine.getComputed(el) : null;
   const isSlide = el === engine.activeSlide();
   const isImage = el?.tagName === "IMG";
@@ -253,6 +257,7 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
                 }}
                 onChange={(hex) => {
                   for (const n of shapeFillEls) n.setAttribute("fill", hex);
+                  engine.markColorsChanged();
                   engine.commit();
                 }}
               />
@@ -269,6 +274,7 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
                 }}
                 onChange={(hex) => {
                   for (const n of shapeStrokeEls) n.setAttribute("stroke", hex);
+                  engine.markColorsChanged();
                   engine.commit();
                 }}
               />
@@ -334,13 +340,12 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
           <div className="section-title">テキスト</div>
           <div className="row">
             <span className="row-label">サイズ</span>
-            <input
-              type="range"
+            <SmoothSlider
               min={8}
               max={120}
               value={fontSize}
-              onChange={(e) => applyFontSize(parseInt(e.target.value, 10), false)}
-              onPointerUp={() => engine.commit()}
+              onInput={(v) => applyFontSize(v, false)}
+              onCommit={() => engine.commit()}
             />
             <input
               type="number"
@@ -442,30 +447,30 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
         <div className="section-title">見た目</div>
         <div className="row">
           <span className="row-label">不透明度</span>
-          <input
-            type="range"
+          <SmoothSlider
             min={5}
             max={100}
             value={Math.round(opacity * 100)}
-            onChange={(e) =>
-              engine.applyStyleTransient("opacity", String(parseInt(e.target.value, 10) / 100))
-            }
-            onPointerUp={() => engine.commit()}
+            onInput={(v) => engine.applyStyleTransient("opacity", String(v / 100))}
+            onCommit={() => engine.commit()}
           />
         </div>
-        <div className="row">
-          <span className="row-label">角丸</span>
-          <input
-            type="range"
-            min={0}
-            max={80}
-            value={radius}
-            onChange={(e) =>
-              engine.applyStyleTransient("border-radius", `${e.target.value}px`)
-            }
-            onPointerUp={() => engine.commit()}
-          />
-        </div>
+        {(!isShape || shapeHasRect) && (
+          <div className="row">
+            <span className="row-label">角丸</span>
+            <SmoothSlider
+              min={0}
+              max={isShape ? 50 : 80}
+              value={isShape ? shapeRectRadius : radius}
+              onInput={(v) =>
+                isShape
+                  ? engine.setShapeRadius(v)
+                  : engine.applyStyleTransient("border-radius", `${v}px`)
+              }
+              onCommit={() => engine.commit()}
+            />
+          </div>
+        )}
         <div className="row">
           <span className="row-label">影</span>
           <button

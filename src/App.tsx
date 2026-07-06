@@ -131,12 +131,13 @@ export default function App() {
     engine.loadFile({ text, name: "デモスライド.html", handle: null });
   };
 
-  // パレット抽出は重めの処理なので、ここで1回だけ行い各パネルへ配る
+  // パレット抽出は重めの処理。色が変わった編集のときだけ再抽出する
+  // （移動・リサイズ・角丸など色に無関係な操作では version が上がっても再計算しない）
   const paletteEntries = useMemo(() => {
-    void version;
     if (!engine.doc) return [];
     return extractPalette(engine.doc, 24);
-  }, [engine, version]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, engine.colorEpoch]);
 
   const paletteHexes = useMemo(
     () => paletteEntries.slice(0, 6).map((p) => p.hex),

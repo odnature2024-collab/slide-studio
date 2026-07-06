@@ -17,10 +17,20 @@ export default function EditorCanvas({ engine, version }: Props) {
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [, setTick] = useState(0);
 
-  // ドラッグ・ホバー等の一時的な更新はキャンバスだけ再描画する
+  // ドラッグ・ホバー等の一時的な更新はキャンバスだけ再描画する。
+  // 連続する更新は requestAnimationFrame で1フレーム1回に束ね、
+  // iframe の過剰な再レイアウト（レイテンシの主因）を防ぐ。
   useEffect(() => {
-    engine.onOverlay = () => setTick((t) => t + 1);
+    let raf = 0;
+    engine.onOverlay = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setTick((t) => t + 1);
+      });
+    };
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       engine.onOverlay = () => {};
     };
   }, [engine]);
