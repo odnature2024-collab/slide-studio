@@ -3,3 +3,7 @@ dist/
 dev-dist/
 *.log
 .DS_Store
+
+# 編集対象のスライド資料（ユーザーのドキュメントはコミットしない）
+/*.html
+!/index.html

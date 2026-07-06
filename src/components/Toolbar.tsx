@@ -3,6 +3,7 @@
 import { useRef } from "react";
 import type { EditorEngine } from "../lib/engine";
 import { openHtmlFile, downloadHtml } from "../lib/fileIO";
+import { exportPdf } from "../lib/pdfExport";
 
 interface Props {
   engine: EditorEngine;
@@ -35,6 +36,17 @@ export default function Toolbar({ engine, onPresent }: Props) {
     const file = e.target.files?.[0];
     if (file) await engine.insertImageFromFile(file);
     e.target.value = "";
+  };
+
+  const handleExportPdf = async () => {
+    engine.finishEditing();
+    await exportPdf({
+      html: engine.serialize(true),
+      slideCount: engine.slides.length,
+      width: engine.slideSize.width,
+      height: engine.slideSize.height,
+      title: (engine.fileName ?? "スライド").replace(/\.html?$/i, ""),
+    });
   };
 
   return (
@@ -73,6 +85,15 @@ export default function Toolbar({ engine, onPresent }: Props) {
         title="ダウンロードとして保存"
       >
         <Icon d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" />
+      </button>
+      <button
+        className="tb-btn"
+        disabled={!engine.loaded}
+        onClick={() => void handleExportPdf()}
+        title="PDFとして書き出し（印刷ダイアログで「PDFに保存」を選択）"
+      >
+        <Icon d="M6 3h9l5 5v13H6zM15 3v5h5M9 13h6M9 17h6" />
+        PDF
       </button>
 
       <div className="tb-sep" />
