@@ -60,6 +60,15 @@ export default function Toolbar({ engine, onPresent }: Props) {
       <button
         className="tb-btn"
         disabled={!engine.loaded}
+        onClick={() => void engine.saveAs()}
+        title="別名で保存（⇧⌘S）"
+      >
+        <Icon d="M5 3h11l5 5v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM8 3v5h7V3M12 11v7m0 0l-3-3m3 3l3-3" />
+        別名で保存
+      </button>
+      <button
+        className="tb-btn"
+        disabled={!engine.loaded}
         onClick={() => downloadHtml(engine.serialize(), engine.fileName ?? "スライド.html")}
         title="ダウンロードとして保存"
       >

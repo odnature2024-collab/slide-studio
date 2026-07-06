@@ -88,7 +88,8 @@ export default function App() {
       if (typing) {
         if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "s") {
           ev.preventDefault();
-          void engine.save();
+          if (ev.shiftKey) void engine.saveAs();
+          else void engine.save();
         }
         return;
       }

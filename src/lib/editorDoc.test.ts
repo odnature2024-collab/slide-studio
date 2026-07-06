@@ -4,6 +4,7 @@ import {
   setActiveSlide,
   serializeDocument,
   markSlides,
+  syncCounterAttributes,
   SLIDE_ATTR,
 } from "./editorDoc";
 
@@ -90,5 +91,43 @@ describe("setActiveSlide + serializeDocument の状態クラス処理", () => {
     const previewSlides = slidesOf(preview);
     expect(previewSlides.every((s) => s.classList.contains("active"))).toBe(true);
     expect(previewSlides.every((s) => s.hasAttribute(SLIDE_ATTR))).toBe(true);
+  });
+});
+
+describe("syncCounterAttributes", () => {
+  it("編集した要素自身の data-target をテキストの数値に同期する", () => {
+    const doc = buildDoc(`<div class="slide"><span data-target="500">1,842</span></div>`);
+    const span = doc.querySelector("span")!;
+    syncCounterAttributes(span, doc.querySelector(".slide"));
+    expect(span.getAttribute("data-target")).toBe("1842");
+  });
+
+  it("子孫のカウンター属性も同期する（%やカンマ付きテキスト）", () => {
+    const doc = buildDoc(
+      `<div class="slide"><div class="stat"><span class="n" data-count="80">96</span>%</div></div>`
+    );
+    const stat = doc.querySelector<HTMLElement>(".stat")!;
+    syncCounterAttributes(stat, doc.querySelector(".slide"));
+    expect(doc.querySelector(".n")!.getAttribute("data-count")).toBe("96");
+  });
+
+  it("親（スライドまで）のカウンター属性も同期する", () => {
+    const doc = buildDoc(
+      `<div class="slide"><div class="stat" data-value="10">実績 <span class="n">42</span> 件</div></div>`
+    );
+    const span = doc.querySelector<HTMLElement>(".n")!;
+    syncCounterAttributes(span, doc.querySelector(".slide"));
+    expect(doc.querySelector(".stat")!.getAttribute("data-value")).toBe("42");
+  });
+
+  it("数値でない data 属性やスライド自身の属性は変更しない", () => {
+    const doc = buildDoc(
+      `<div class="slide" data-target="99"><span data-value="hello" data-duration="2000">42</span></div>`
+    );
+    const span = doc.querySelector("span")!;
+    syncCounterAttributes(span, doc.querySelector(".slide"));
+    expect(span.getAttribute("data-value")).toBe("hello");
+    expect(span.getAttribute("data-duration")).toBe("2000");
+    expect(doc.querySelector(".slide")!.getAttribute("data-target")).toBe("99");
   });
 });

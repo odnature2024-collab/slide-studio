@@ -9,6 +9,7 @@ import {
   setActiveSlide,
   serializeDocument,
   detectStateClass,
+  syncCounterAttributes,
   SELECTED_ATTR,
   type SlideStateClass,
 } from "./editorDoc";
@@ -208,6 +209,21 @@ export class EditorEngine {
     if (!this.doc || !this.fileName) return false;
     this.finishEditing();
     const handle = await saveHtmlFile(this.serialize(), this.fileName, this.fileHandle);
+    if (handle) {
+      this.fileHandle = handle;
+      this.fileName = handle.name;
+    }
+    this.dirty = false;
+    this.onUpdate();
+    return true;
+  }
+
+  /** 別名で保存（保存ダイアログで新しいファイルを選ぶ。非対応環境ではダウンロード） */
+  async saveAs(): Promise<boolean> {
+    if (!this.doc || !this.fileName) return false;
+    this.finishEditing();
+    const handle = await saveHtmlFile(this.serialize(), this.fileName, null);
+    if (!handle && window.showSaveFilePicker) return false; // ダイアログをキャンセル
     if (handle) {
       this.fileHandle = handle;
       this.fileName = handle.name;
@@ -820,8 +836,13 @@ export class EditorEngine {
     if (!el) return;
     this.editingEl = null;
     el.removeAttribute("contenteditable");
-    if (el.innerHTML !== this.editingOriginalHtml) this.commit();
-    else this.onOverlay();
+    if (el.innerHTML !== this.editingOriginalHtml) {
+      // カウントアップ等のスクリプトが参照する数値属性を編集後のテキストに合わせる
+      syncCounterAttributes(el, this.activeSlide());
+      this.commit();
+    } else {
+      this.onOverlay();
+    }
   }
 
   // ---- キーボード ----
@@ -838,7 +859,8 @@ export class EditorEngine {
     }
     if (meta && key.toLowerCase() === "s") {
       ev.preventDefault();
-      void this.save();
+      if (ev.shiftKey) void this.saveAs();
+      else void this.save();
       return;
     }
     if (this.editingEl) {

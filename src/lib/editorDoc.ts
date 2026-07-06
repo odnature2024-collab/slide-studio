@@ -205,6 +205,55 @@ export function serializeDocument(doc: Document, options: SerializeOptions = {})
   return `<!DOCTYPE html>\n${root.outerHTML}`;
 }
 
+/**
+ * カウントアップ系アニメーションのスクリプトが目標値として参照しがちな data 属性。
+ * （エディタの iframe はスクリプト無効のため、編集で変わるのは静的テキストのみ。
+ * 属性を同期しないと、再生時にスクリプトが古い数値へ上書きしてしまう）
+ */
+const COUNTER_ATTR_NAMES = [
+  "data-target",
+  "data-count",
+  "data-counter",
+  "data-value",
+  "data-to",
+  "data-end",
+  "data-final",
+  "data-number",
+  "data-num",
+  "data-total",
+];
+
+/** "1,842人" や "96%" のような表示テキストから最初の数値を取り出す（カンマ除去済み） */
+function extractNumber(text: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(/-?\d[\d,]*(?:\.\d+)?/);
+  if (!m) return null;
+  return m[0].replace(/,/g, "");
+}
+
+/**
+ * テキスト編集後、要素の表示テキストとカウンター系 data 属性の数値を同期する。
+ * 編集した要素自身・その子孫・スライドまでの祖先を対象に、
+ * 「数値を持つカウンター属性」があれば各要素自身のテキストの数値で上書きする。
+ */
+export function syncCounterAttributes(edited: Element, stopAt: Element | null = null): void {
+  const targets: Element[] = [edited, ...Array.from(edited.querySelectorAll("*"))];
+  let ancestor = edited.parentElement;
+  while (ancestor && ancestor !== stopAt && ancestor.tagName !== "BODY") {
+    targets.push(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+  for (const el of targets) {
+    for (const name of COUNTER_ATTR_NAMES) {
+      const current = el.getAttribute(name);
+      // 数値として使われている属性だけを対象にする（文字列の data-value 等は触らない）
+      if (current == null || extractNumber(current) !== current.trim()) continue;
+      const num = extractNumber(el.textContent);
+      if (num != null && num !== current.trim()) el.setAttribute(name, num);
+    }
+  }
+}
+
 /** シリアライズ済み HTML の </head> 直前にスタイルを差し込む（サムネイル・プレビュー用） */
 export function injectStyleIntoHtml(html: string, css: string, id?: string): string {
   const tag = id ? `<style id="${id}">${css}</style>` : `<style>${css}</style>`;
