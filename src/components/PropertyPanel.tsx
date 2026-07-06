@@ -1,7 +1,7 @@
 // 右パネル：選択中の要素の個別編集（色・フォント・配置・画像）
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { EditorEngine } from "../lib/engine";
+import type { AlignCommand, EditorEngine } from "../lib/engine";
 import { normalizeColor } from "../lib/color";
 import {
   FONT_CATALOG,
@@ -23,6 +23,41 @@ function toHex(cssColor: string | undefined): string | null {
   const norm = normalizeColor(cssColor);
   if (!norm || norm.alpha === 0) return null;
   return norm.hex;
+}
+
+/** 整列ボタンの定義（基準線＋2つのボックスを描いたアイコン） */
+const ALIGN_BUTTONS: Array<{ cmd: AlignCommand; title: string; d: string }> = [
+  { cmd: "left", title: "左揃え", d: "M4 3v18M8 6h11v4H8zM8 14h7v4H8z" },
+  { cmd: "hcenter", title: "左右中央揃え", d: "M12 3v18M6 6h12v4H6zM8 14h8v4H8z" },
+  { cmd: "right", title: "右揃え", d: "M20 3v18M5 6h11v4H5zM9 14h7v4H9z" },
+  { cmd: "top", title: "上揃え", d: "M3 4h18M6 8h4v11H6zM14 8h4v7h-4z" },
+  { cmd: "vcenter", title: "上下中央揃え", d: "M3 12h18M6 6h4v12H6zM14 8h4v8h-4z" },
+  { cmd: "bottom", title: "下揃え", d: "M3 20h18M6 5h4v11H6zM14 9h4v7h-4z" },
+];
+
+function AlignButtons({
+  onAlign,
+  titleSuffix,
+}: {
+  onAlign: (cmd: AlignCommand) => void;
+  titleSuffix: string;
+}) {
+  return (
+    <>
+      {ALIGN_BUTTONS.map(({ cmd, title, d }) => (
+        <button
+          key={cmd}
+          className="icon-toggle"
+          title={`${title}${titleSuffix}`}
+          onClick={() => onAlign(cmd)}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <path d={d} />
+          </svg>
+        </button>
+      ))}
+    </>
+  );
 }
 
 export default function PropertyPanel({ engine, version, palette }: Props) {
@@ -57,6 +92,39 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
         ダブルクリックで文字を直接編集、
         <br />
         ドラッグで移動できます。
+      </div>
+    );
+  }
+
+  // 複数選択中は整列・削除に絞った専用パネルを表示する
+  if (engine.selection.length >= 2) {
+    return (
+      <div>
+        <div className="section">
+          <div className="row">
+            <span className="tag-badge">{engine.selection.length}個の要素を選択中</span>
+            <span style={{ flex: 1 }} />
+            <button className="small-btn danger" onClick={() => engine.deleteSelection()}>
+              削除
+            </button>
+          </div>
+        </div>
+        <div className="section">
+          <div className="section-title">選択した要素をそろえる</div>
+          <div className="row">
+            <AlignButtons onAlign={(cmd) => engine.alignSelection(cmd)} titleSuffix="（要素同士）" />
+          </div>
+        </div>
+        <div className="section">
+          <div className="section-title">スライドに対して整列</div>
+          <div className="row">
+            <AlignButtons onAlign={(cmd) => engine.alignToSlide(cmd)} titleSuffix="（スライド基準）" />
+          </div>
+        </div>
+        <div className="placeholder" style={{ padding: "6px 0", textAlign: "left" }}>
+          Shift+クリックまたは複数選択モードで選択を追加・解除できます。
+          選択の内側をドラッグするとまとめて移動します。
+        </div>
       </div>
     );
   }
@@ -370,6 +438,10 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
       {!isSlide && (
         <div className="section">
           <div className="section-title">配置</div>
+          <div className="row">
+            <span className="row-label" title="スライドに対して整列">整列</span>
+            <AlignButtons onAlign={(cmd) => engine.alignToSlide(cmd)} titleSuffix="（スライド基準）" />
+          </div>
           <div className="row">
             <button className="small-btn" onClick={() => bringForward(1)}>
               前面へ

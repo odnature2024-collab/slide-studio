@@ -104,6 +104,16 @@ export default function Toolbar({ engine, onPresent }: Props) {
         onChange={handleImageSelected}
       />
 
+      <button
+        className={`tb-btn ${engine.multiSelectMode ? "on" : ""}`}
+        disabled={!engine.loaded}
+        onClick={() => engine.setMultiSelectMode(!engine.multiSelectMode)}
+        title="複数選択モード（ON の間はクリック／タップで要素を追加選択）"
+      >
+        <Icon d="M3 3h9v9H3zM12 12h9v9h-9z" />
+        複数選択
+      </button>
+
       <div className="tb-spacer" />
 
       {engine.loaded && (

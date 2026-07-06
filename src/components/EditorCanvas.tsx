@@ -81,9 +81,13 @@ export default function EditorCanvas({ engine, version }: Props) {
     return { x: (ev.clientX - rect.left) / scale, y: (ev.clientY - rect.top) / scale };
   };
 
-  const selRect = engine.selected ? engine.getRect(engine.selected) : null;
+  // 複数選択に対応: すべての選択要素に枠を描く（ハンドル・ラベルは単一選択時のみ）
+  const selRects = engine.selection
+    .map((el) => engine.getRect(el))
+    .filter((r): r is DOMRect => r != null);
+  const selRect = engine.selection.length === 1 ? selRects[0] ?? null : null;
   const hovRect =
-    engine.hovered && engine.hovered !== engine.selected ? engine.getRect(engine.hovered) : null;
+    engine.hovered && !engine.isSelected(engine.hovered) ? engine.getRect(engine.hovered) : null;
   const isSlideSelected = engine.selected === engine.activeSlide();
   const handleSize = 9 / scale;
 
@@ -138,7 +142,7 @@ export default function EditorCanvas({ engine, version }: Props) {
               // 合成イベント等で pointerId が無効な場合は無視
             }
             const p = toLocal(e);
-            engine.overlayPointerDown(p.x, p.y);
+            engine.overlayPointerDown(p.x, p.y, e.shiftKey || e.ctrlKey || e.metaKey);
           }}
           onPointerMove={(e) => {
             if (!engine.doc) return;
@@ -172,17 +176,15 @@ export default function EditorCanvas({ engine, version }: Props) {
               }}
             />
           )}
+          {selRects.map((r, i) => (
+            <div
+              key={i}
+              className="select-box"
+              style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+            />
+          ))}
           {selRect && (
             <>
-              <div
-                className="select-box"
-                style={{
-                  left: selRect.left,
-                  top: selRect.top,
-                  width: selRect.width,
-                  height: selRect.height,
-                }}
-              />
               <div
                 className="select-label"
                 style={{ left: selRect.left, top: selRect.top, fontSize: 10 / scale }}
@@ -222,7 +224,7 @@ export default function EditorCanvas({ engine, version }: Props) {
         </div>
       </div>
       <div className="canvas-hint">
-        クリックで選択 ／ ダブルクリックで文字編集 ／ ドラッグで移動 ／ ⌘Z で元に戻す
+        クリックで選択 ／ Shift+クリックで複数選択 ／ ダブルクリックで文字編集 ／ ドラッグで移動 ／ ⌘Z で元に戻す
       </div>
     </div>
   );

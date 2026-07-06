@@ -27,11 +27,18 @@ interface PointerState {
   target: StylableElement | null;
 }
 
-interface DragState {
+interface TransformBase {
   baseTransform: string;
   baseDx: number;
   baseDy: number;
 }
+
+/** ドラッグ中の対象（複数選択ではすべての要素をまとめて動かす） */
+interface DragState {
+  items: Array<{ el: StylableElement; base: TransformBase }>;
+}
+
+export type AlignCommand = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
 
 export interface ResizeStart {
   width: number;
@@ -59,7 +66,10 @@ export class EditorEngine {
   detectionConfident = true;
   slideSize = { width: 1280, height: 720 };
   current = 0;
-  selected: StylableElement | null = null;
+  /** 選択中の要素（複数選択対応。先頭が主選択） */
+  selection: StylableElement[] = [];
+  /** タッチ環境用: ON の間はクリックのたびに選択へ追加／解除する */
+  multiSelectMode = false;
   hovered: StylableElement | null = null;
   editingEl: StylableElement | null = null;
   fileName: string | null = null;
@@ -121,7 +131,7 @@ export class EditorEngine {
     const doc = this.iframe?.contentDocument;
     if (!doc || !doc.body) return;
     this.doc = doc;
-    this.selected = null;
+    this.selection = [];
     this.hovered = null;
     this.editingEl = null;
     this.pointer = null;
@@ -266,12 +276,54 @@ export class EditorEngine {
     return this.slides[this.current] ?? null;
   }
 
+  /** 主選択（複数選択時は先頭の要素）。既存コードとの互換用 */
+  get selected(): StylableElement | null {
+    return this.selection[0] ?? null;
+  }
+
   select(el: StylableElement | null): void {
-    if (this.selected === el) return;
-    this.selected?.removeAttribute(SELECTED_ATTR);
-    this.selected = el;
-    el?.setAttribute(SELECTED_ATTR, "");
+    const same = el
+      ? this.selection.length === 1 && this.selection[0] === el
+      : this.selection.length === 0;
+    if (same) return;
+    this.setSelection(el ? [el] : []);
+  }
+
+  /** 追加選択／選択解除（Shift+クリック・複数選択モード用）。スライド自体は対象外 */
+  toggleSelect(el: StylableElement): void {
+    if (el === this.activeSlide()) return;
+    if (this.selection.includes(el)) {
+      this.setSelection(this.selection.filter((e) => e !== el));
+      return;
+    }
+    // スライド自体や、祖先・子孫関係にある要素は同時選択しない（移動が二重適用されるため）
+    const rest = this.selection.filter(
+      (e) => e !== this.activeSlide() && !e.contains(el) && !el.contains(e)
+    );
+    this.setSelection([...rest, el]);
+  }
+
+  isSelected(el: StylableElement): boolean {
+    return this.selection.includes(el);
+  }
+
+  setMultiSelectMode(on: boolean): void {
+    if (this.multiSelectMode === on) return;
+    this.multiSelectMode = on;
     this.onUpdate();
+  }
+
+  private setSelection(els: StylableElement[]): void {
+    for (const prev of this.selection) prev.removeAttribute(SELECTED_ATTR);
+    this.selection = els;
+    for (const el of els) el.setAttribute(SELECTED_ATTR, "");
+    this.onUpdate();
+  }
+
+  /** 選択中の要素のうち移動・整列・削除の対象になるもの（スライド自体を除く） */
+  private movableSelection(): StylableElement[] {
+    const active = this.activeSlide();
+    return this.selection.filter((el) => el !== active);
   }
 
   /** クリック位置から選択対象を決める（アクティブスライドの内側のみ） */
@@ -299,8 +351,8 @@ export class EditorEngine {
     return this.doc?.elementFromPoint(x, y) ?? null;
   }
 
-  overlayPointerDown(x: number, y: number): void {
-    this.pointerDownCore(x, y, this.elementAt(x, y));
+  overlayPointerDown(x: number, y: number, additive = false): void {
+    this.pointerDownCore(x, y, this.elementAt(x, y), additive);
   }
 
   overlayPointerMove(x: number, y: number): void {
@@ -342,7 +394,7 @@ export class EditorEngine {
         } catch {
           // 合成イベント等で pointerId が無効な場合は無視
         }
-        this.pointerDownCore(ev.clientX, ev.clientY, ev.target);
+        this.pointerDownCore(ev.clientX, ev.clientY, ev.target, ev.shiftKey || ev.ctrlKey || ev.metaKey);
       },
       opts
     );
@@ -392,16 +444,28 @@ export class EditorEngine {
   // iPad の Safari は縮小表示した iframe へのタッチ入力に不具合があるため、
   // 実際の入力は親ドキュメントのオーバーレイで受けて overlay* 経由で渡される。
 
-  private pointerDownCore(x: number, y: number, rawTarget: EventTarget | null): void {
+  private pointerDownCore(
+    x: number,
+    y: number,
+    rawTarget: EventTarget | null,
+    additive = false
+  ): void {
     if (this.editingEl) {
       if (rawTarget && this.editingEl.contains(rawTarget as Node)) return; // テキスト編集中はそのまま
       this.finishEditing();
     }
     const el = this.pick(rawTarget);
+
+    // 追加選択（Shift/Ctrl+クリック・複数選択モード）: タップごとに選択へ追加／解除。
+    // ドラッグ移動は通常モードで選択の内側をつかんで行う
+    if (additive || this.multiSelectMode) {
+      this.pointer = null;
+      if (el && el !== this.activeSlide()) this.toggleSelect(el);
+      return;
+    }
+
     const wasInside =
-      el != null &&
-      this.selected != null &&
-      (this.selected === el || this.selected.contains(el));
+      el != null && this.selection.some((s) => s === el || s.contains(el));
 
     this.pointer = {
       startX: x,
@@ -424,19 +488,22 @@ export class EditorEngine {
       const dy = y - this.pointer.startY;
       if (!this.pointer.moved && Math.hypot(dx, dy) > 3) {
         this.pointer.moved = true;
-        if (this.selected && this.selected !== this.activeSlide() && !this.editingEl) {
-          this.drag = this.captureTransformBase(this.selected);
+        const movable = this.movableSelection();
+        if (movable.length > 0 && !this.editingEl) {
+          this.drag = {
+            items: movable.map((el) => ({ el, base: this.captureTransformBase(el) })),
+          };
         }
       }
-      if (this.pointer.moved && this.drag && this.selected) {
-        this.applyTranslate(this.selected, this.drag, dx, dy);
+      if (this.pointer.moved && this.drag) {
+        for (const { el, base } of this.drag.items) this.applyTranslate(el, base, dx, dy);
         this.onOverlay();
       }
       return;
     }
     // ホバーハイライト
     const el = this.pick(rawTarget);
-    const next = el === this.selected ? null : el;
+    const next = el && this.selection.includes(el) ? null : el;
     if (next !== this.hovered) {
       this.hovered = next;
       this.onOverlay();
@@ -468,8 +535,8 @@ export class EditorEngine {
       if (isDoubleTap && !this.editingEl && this.tryStartTextEdit(el)) return;
     }
 
-    // クリック（移動なし）: 選択の深掘り・親への拡大
-    if (!el || !this.selected || !pointer.wasInsideSelection) return;
+    // クリック（移動なし）: 選択の深掘り・親への拡大（単一選択時のみ）
+    if (!el || this.selection.length !== 1 || !this.selected || !pointer.wasInsideSelection) return;
     const active = this.activeSlide();
     if (this.selected === el) {
       // 選択中の要素そのものを再クリック → 親要素へ拡大
@@ -485,7 +552,7 @@ export class EditorEngine {
 
   // ---- ドラッグ移動（transform: translate 方式） ----
 
-  private captureTransformBase(el: StylableElement): DragState {
+  private captureTransformBase(el: StylableElement): TransformBase {
     const ds = (el as HTMLElement).dataset;
     if (ds.hseBase == null) {
       ds.hseBase = el.style.transform || "";
@@ -499,24 +566,26 @@ export class EditorEngine {
     };
   }
 
-  private applyTranslate(el: StylableElement, drag: DragState, dx: number, dy: number): void {
-    const nx = drag.baseDx + dx;
-    const ny = drag.baseDy + dy;
+  private applyTranslate(el: StylableElement, base: TransformBase, dx: number, dy: number): void {
+    const nx = base.baseDx + dx;
+    const ny = base.baseDy + dy;
     const ds = (el as HTMLElement).dataset;
     ds.hseDx = String(nx);
     ds.hseDy = String(ny);
     const translate = `translate(${Math.round(nx)}px, ${Math.round(ny)}px)`;
-    el.style.transform = drag.baseTransform
-      ? `${drag.baseTransform} ${translate}`
+    el.style.transform = base.baseTransform
+      ? `${base.baseTransform} ${translate}`
       : translate;
   }
 
   /** 矢印キーでの微移動 */
   nudge(dx: number, dy: number): void {
-    const el = this.selected;
-    if (!el || el === this.activeSlide()) return;
-    const base = this.captureTransformBase(el);
-    this.applyTranslate(el, base, dx, dy);
+    const els = this.movableSelection();
+    if (els.length === 0) return;
+    for (const el of els) {
+      const base = this.captureTransformBase(el);
+      this.applyTranslate(el, base, dx, dy);
+    }
     this.onOverlay();
     if (this.nudgeTimer != null) window.clearTimeout(this.nudgeTimer);
     this.nudgeTimer = window.setTimeout(() => {
@@ -527,18 +596,89 @@ export class EditorEngine {
 
   /** ドラッグで加えた移動を取り消して元の位置に戻す */
   resetPosition(): void {
-    const el = this.selected;
-    if (!el) return;
-    const ds = (el as HTMLElement).dataset;
-    const base = ds.hseBase;
-    if (base != null) {
-      if (base) el.style.transform = base;
-      else el.style.removeProperty("transform");
-      delete ds.hseBase;
-      delete ds.hseDx;
-      delete ds.hseDy;
-    } else {
-      el.style.removeProperty("transform");
+    if (this.selection.length === 0) return;
+    for (const el of this.selection) {
+      const ds = (el as HTMLElement).dataset;
+      const base = ds.hseBase;
+      if (base != null) {
+        if (base) el.style.transform = base;
+        else el.style.removeProperty("transform");
+        delete ds.hseBase;
+        delete ds.hseDx;
+        delete ds.hseDy;
+      } else {
+        el.style.removeProperty("transform");
+      }
+    }
+    this.commit();
+  }
+
+  /** 選択中の要素をすべて削除する（スライド自体は削除しない） */
+  deleteSelection(): void {
+    const els = this.movableSelection();
+    if (els.length === 0) return;
+    for (const el of els) el.remove();
+    this.select(null);
+    this.commit();
+  }
+
+  // ---- 整列 ----
+
+  /** 選択中の要素をスライドに対して整列する */
+  alignToSlide(cmd: AlignCommand): void {
+    const slide = this.activeSlide();
+    const els = this.movableSelection();
+    if (!slide || els.length === 0) return;
+    this.alignToRect(els, slide.getBoundingClientRect(), cmd);
+  }
+
+  /** 複数選択した要素同士を、選択全体の外接矩形を基準に整列する */
+  alignSelection(cmd: AlignCommand): void {
+    const els = this.movableSelection();
+    if (els.length < 2) return;
+    const rects = els.map((el) => el.getBoundingClientRect());
+    this.alignToRect(els, {
+      left: Math.min(...rects.map((r) => r.left)),
+      right: Math.max(...rects.map((r) => r.right)),
+      top: Math.min(...rects.map((r) => r.top)),
+      bottom: Math.max(...rects.map((r) => r.bottom)),
+    }, cmd);
+  }
+
+  private alignToRect(
+    els: StylableElement[],
+    ref: { left: number; right: number; top: number; bottom: number },
+    cmd: AlignCommand
+  ): void {
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      let dx = 0;
+      let dy = 0;
+      switch (cmd) {
+        case "left":
+          dx = ref.left - r.left;
+          break;
+        case "hcenter":
+          dx = (ref.left + ref.right) / 2 - (r.left + r.right) / 2;
+          break;
+        case "right":
+          dx = ref.right - r.right;
+          break;
+        case "top":
+          dy = ref.top - r.top;
+          break;
+        case "vcenter":
+          dy = (ref.top + ref.bottom) / 2 - (r.top + r.bottom) / 2;
+          break;
+        case "bottom":
+          dy = ref.bottom - r.bottom;
+          break;
+      }
+      dx = Math.round(dx);
+      dy = Math.round(dy);
+      if (dx === 0 && dy === 0) continue;
+      const base = this.captureTransformBase(el);
+      this.applyTranslate(el, base, dx, dy);
     }
     this.commit();
   }
@@ -546,6 +686,7 @@ export class EditorEngine {
   // ---- リサイズ（オーバーレイのハンドルから呼ばれる） ----
 
   beginResize(): ResizeStart | null {
+    if (this.selection.length !== 1) return null; // リサイズは単一選択時のみ
     const el = this.selected;
     if (!el || el === this.activeSlide()) return null;
     const rect = el.getBoundingClientRect();
@@ -708,12 +849,10 @@ export class EditorEngine {
       this.select(null);
       return;
     }
-    if ((key === "Delete" || key === "Backspace") && this.selected) {
-      if (this.selected !== this.activeSlide()) {
+    if ((key === "Delete" || key === "Backspace") && this.selection.length > 0) {
+      if (this.movableSelection().length > 0) {
         ev.preventDefault();
-        this.selected.remove();
-        this.select(null);
-        this.commit();
+        this.deleteSelection();
       }
       return;
     }
