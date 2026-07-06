@@ -571,7 +571,15 @@ export class EditorEngine {
   private captureTransformBase(el: StylableElement): TransformBase {
     const ds = (el as HTMLElement).dataset;
     if (ds.hseBase == null) {
-      ds.hseBase = el.style.transform || "";
+      const cs = this.getComputed(el);
+      // インライン要素（span 等）には transform が効かないため、
+      // 見た目を変えない inline-block に昇格させて動かせるようにする
+      if (cs && cs.display === "inline") el.style.display = "inline-block";
+      // スタイルシート由来の transform（回転など）をインライン上書きで
+      // 消してしまわないよう、算出値を基準として引き継ぐ
+      const styleTransform = el.style.transform;
+      const computedTransform = cs && cs.transform !== "none" ? cs.transform : "";
+      ds.hseBase = styleTransform || computedTransform;
       ds.hseDx = "0";
       ds.hseDy = "0";
     }
@@ -981,6 +989,39 @@ export class EditorEngine {
     const el = this.selected;
     if (!el || el.tagName !== "IMG") return;
     (el as HTMLImageElement).src = await readAsDataUrl(file);
+    this.commit();
+  }
+
+  // ---- 図形挿入 ----
+
+  /**
+   * SVG 図形をアクティブスライドの中央に挿入する。
+   * preserveAspectRatio="none" なのでリサイズで自由に伸縮できる。
+   */
+  insertShape(innerSvg: string, aspect = 1): void {
+    const doc = this.doc;
+    const slide = this.activeSlide();
+    if (!doc || !slide) return;
+    const cs = this.getComputed(slide);
+    if (cs && cs.position === "static") slide.style.position = "relative";
+    const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    const w = Math.round(this.slideSize.width * 0.2);
+    const h = Math.max(12, Math.round(w * aspect));
+    svg.style.cssText = [
+      "position: absolute",
+      `left: ${Math.round((this.slideSize.width - w) / 2)}px`,
+      `top: ${Math.round((this.slideSize.height - h) / 2)}px`,
+      `width: ${w}px`,
+      `height: ${h}px`,
+      "overflow: visible",
+    ].join("; ");
+    // innerSvg はアプリ内蔵の図形カタログ（shapes.ts）と検証済みカラーのみで
+    // 組み立てられるため、ユーザー入力由来の HTML は含まれない
+    svg.innerHTML = innerSvg;
+    slide.appendChild(svg);
+    this.select(svg);
     this.commit();
   }
 }

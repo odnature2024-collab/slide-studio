@@ -1,13 +1,16 @@
-// 上部ツールバー：開く / 保存 / Undo / Redo / 画像挿入 / プレゼン
+// 上部ツールバー：開く / 保存 / Undo / Redo / 画像・図形挿入 / プレゼン
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
 import { openHtmlFile, downloadHtml } from "../lib/fileIO";
 import { exportPdf } from "../lib/pdfExport";
+import { SHAPES, shapeMarkup } from "../lib/shapes";
 
 interface Props {
   engine: EditorEngine;
   version: number;
+  /** 図形挿入の初期色（テーマのメインカラー） */
+  shapeFill: string;
   onPresent: () => void;
 }
 
@@ -19,8 +22,9 @@ function Icon({ d }: { d: string }) {
   );
 }
 
-export default function Toolbar({ engine, onPresent }: Props) {
+export default function Toolbar({ engine, shapeFill, onPresent }: Props) {
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const [shapeOpen, setShapeOpen] = useState(false);
 
   const handleOpen = async () => {
     if (engine.dirty && !window.confirm("未保存の変更があります。破棄して別のファイルを開きますか？")) {
@@ -133,6 +137,39 @@ export default function Toolbar({ engine, onPresent }: Props) {
         style={{ display: "none" }}
         onChange={handleImageSelected}
       />
+
+      <div className="shape-wrap">
+        <button
+          className={`tb-btn ${shapeOpen ? "on" : ""}`}
+          disabled={!engine.loaded}
+          onClick={() => setShapeOpen((o) => !o)}
+          title="図形を挿入"
+        >
+          <Icon d="M12 3l4 7H8l4-7zM4 14h7v7H4zM17.5 21a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+          図形
+        </button>
+        {shapeOpen && (
+          <div className="shape-pop">
+            {SHAPES.map((s) => (
+              <button
+                key={s.id}
+                className="shape-item"
+                title={s.label}
+                onClick={() => {
+                  engine.insertShape(shapeMarkup(s, shapeFill), s.aspect ?? 1);
+                  setShapeOpen(false);
+                }}
+              >
+                <svg
+                  viewBox="-6 -6 112 112"
+                  // アプリ内蔵の図形カタログのみを描画する（ユーザー入力は含まれない）
+                  dangerouslySetInnerHTML={{ __html: shapeMarkup(s, "currentColor") }}
+                />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <button
         className={`tb-btn ${engine.multiSelectMode ? "on" : ""}`}

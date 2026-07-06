@@ -2,12 +2,19 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
-import { extractPalette, ROLE_LABELS, type ColorRole } from "../lib/colorExtractor";
+import {
+  extractPalette,
+  ROLE_LABELS,
+  type ColorRole,
+  type PaletteEntry,
+} from "../lib/colorExtractor";
 import { replaceColorEverywhere } from "../lib/themeApplier";
 
 interface Props {
   engine: EditorEngine;
   version: number;
+  /** App で1回だけ抽出した近似色まとめ済みパレット（再抽出を避ける） */
+  mergedPalette: PaletteEntry[];
 }
 
 const MERGE_TOLERANCE = 24;
@@ -33,7 +40,7 @@ const PRESETS: Preset[] = [
 
 const ROLE_ORDER: ColorRole[] = ["main", "sub", "accent", "background", "text", "other"];
 
-export default function ThemePanel({ engine, version }: Props) {
+export default function ThemePanel({ engine, version, mergedPalette }: Props) {
   const [merge, setMerge] = useState(true);
   const [roleOverrides, setRoleOverrides] = useState<Record<string, ColorRole>>({});
   // ライブプレビュー中の置換対象（連続置換で色が変わっていくため追跡が必要）
@@ -41,9 +48,11 @@ export default function ThemePanel({ engine, version }: Props) {
 
   const palette = useMemo(() => {
     void version;
+    // まとめ表示は App で抽出済みのものを使う（既定。再抽出しない）
+    if (merge) return mergedPalette;
     if (!engine.doc) return [];
-    return extractPalette(engine.doc, merge ? MERGE_TOLERANCE : 0);
-  }, [engine, version, merge]);
+    return extractPalette(engine.doc, 0);
+  }, [engine, version, merge, mergedPalette]);
 
   const effectiveRole = (hex: string, fallback: ColorRole): ColorRole =>
     roleOverrides[hex] ?? fallback;

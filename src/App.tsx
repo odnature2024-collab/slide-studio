@@ -131,17 +131,30 @@ export default function App() {
     engine.loadFile({ text, name: "デモスライド.html", handle: null });
   };
 
-  const palette = useMemo(() => {
+  // パレット抽出は重めの処理なので、ここで1回だけ行い各パネルへ配る
+  const paletteEntries = useMemo(() => {
     void version;
     if (!engine.doc) return [];
-    return extractPalette(engine.doc, 24)
-      .slice(0, 6)
-      .map((p) => p.hex);
+    return extractPalette(engine.doc, 24);
   }, [engine, version]);
+
+  const paletteHexes = useMemo(
+    () => paletteEntries.slice(0, 6).map((p) => p.hex),
+    [paletteEntries]
+  );
+
+  // 図形挿入の初期色はテーマのメインカラー
+  const shapeFill =
+    paletteEntries.find((p) => p.role === "main")?.hex ?? paletteEntries[0]?.hex ?? "#4285f4";
 
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
-      <Toolbar engine={engine} version={version} onPresent={() => setPresenting(true)} />
+      <Toolbar
+        engine={engine}
+        version={version}
+        shapeFill={shapeFill}
+        onPresent={() => setPresenting(true)}
+      />
 
       {engine.loaded ? (
         <div className={`app-main ${splitting ? "splitting" : ""}`}>
@@ -174,9 +187,9 @@ export default function App() {
             </div>
             <div className="side-body">
               {tab === "theme" ? (
-                <ThemePanel engine={engine} version={version} />
+                <ThemePanel engine={engine} version={version} mergedPalette={paletteEntries} />
               ) : (
-                <PropertyPanel engine={engine} version={version} palette={palette} />
+                <PropertyPanel engine={engine} version={version} palette={paletteHexes} />
               )}
             </div>
           </aside>

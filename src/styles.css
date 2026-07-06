@@ -182,6 +182,47 @@ input[type="number"] {
   background: #ff6f4e;
 }
 
+/* 図形挿入ポップオーバー */
+
+.shape-wrap {
+  position: relative;
+}
+
+.shape-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(4, 44px);
+  gap: 6px;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.shape-item {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  transition: background 0.12s, color 0.12s;
+}
+
+.shape-item:hover {
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.shape-item svg {
+  width: 26px;
+  height: 26px;
+}
+
 .tb-sep {
   width: 1px;
   height: 20px;

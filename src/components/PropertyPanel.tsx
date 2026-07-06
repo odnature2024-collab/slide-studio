@@ -62,6 +62,16 @@ function AlignButtons({
 
 export default function PropertyPanel({ engine, version, palette }: Props) {
   const el = engine.selected;
+  const isShape = el?.tagName.toLowerCase() === "svg";
+  // 図形（SVG）の塗り・線の対象要素（fill/stroke 属性を持つ子）
+  const shapeFillEls = isShape
+    ? Array.from(el!.querySelectorAll("[fill]")).filter((n) => n.getAttribute("fill") !== "none")
+    : [];
+  const shapeStrokeEls = isShape
+    ? Array.from(el!.querySelectorAll("[stroke]")).filter(
+        (n) => n.getAttribute("stroke") !== "none"
+      )
+    : [];
   const computed = el ? engine.getComputed(el) : null;
   const isSlide = el === engine.activeSlide();
   const isImage = el?.tagName === "IMG";
@@ -226,6 +236,44 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
               <option value="cover">切り抜いて埋める</option>
             </select>
           </div>
+        </div>
+      )}
+
+      {isShape && (shapeFillEls.length > 0 || shapeStrokeEls.length > 0) && (
+        <div className="section">
+          <div className="section-title">図形</div>
+          {shapeFillEls.length > 0 && (
+            <div className="row">
+              <span className="row-label">塗り</span>
+              <ColorField
+                value={toHex(shapeFillEls[0].getAttribute("fill") ?? "")}
+                palette={palette}
+                onPreview={(hex) => {
+                  for (const n of shapeFillEls) n.setAttribute("fill", hex);
+                }}
+                onChange={(hex) => {
+                  for (const n of shapeFillEls) n.setAttribute("fill", hex);
+                  engine.commit();
+                }}
+              />
+            </div>
+          )}
+          {shapeStrokeEls.length > 0 && (
+            <div className="row">
+              <span className="row-label">線の色</span>
+              <ColorField
+                value={toHex(shapeStrokeEls[0].getAttribute("stroke") ?? "")}
+                palette={palette}
+                onPreview={(hex) => {
+                  for (const n of shapeStrokeEls) n.setAttribute("stroke", hex);
+                }}
+                onChange={(hex) => {
+                  for (const n of shapeStrokeEls) n.setAttribute("stroke", hex);
+                  engine.commit();
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
