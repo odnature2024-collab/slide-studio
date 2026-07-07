@@ -16,14 +16,35 @@ interface Props {
 const THUMB_DEBOUNCE_MS = 600;
 
 export default function SlidePanel({ engine, version, panelWidth }: Props) {
-  const [thumbHtml, setThumbHtml] = useState("");
+  // スライドごとの srcDoc を個別に持つ。編集時は該当スライドの分だけ差し替えるので、
+  // 他のサムネイル iframe（srcDoc が同一文字列のまま）はリロードされない。
+  const [htmls, setHtmls] = useState<string[]>([]);
   const [visible, setVisible] = useState<Set<number>>(new Set());
   const panelRef = useRef<HTMLElement>(null);
+  const lastStructRef = useRef(-1);
 
   // サムネイルの再生成は変更が落ち着いてから（負荷対策）
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setThumbHtml(engine.loaded ? engine.serialize(true) : "");
+      if (!engine.loaded) {
+        setHtmls([]);
+        lastStructRef.current = -1;
+        return;
+      }
+      const full = engine.serialize(true);
+      const build = (i: number) => injectStyleIntoHtml(full, onlySlideCss(i));
+      const structChanged = engine.structureEpoch !== lastStructRef.current;
+      lastStructRef.current = engine.structureEpoch;
+      setHtmls((prev) => {
+        // スライドの追加・削除・並べ替え時、または枚数不一致は全再構築
+        if (structChanged || prev.length !== engine.slides.length) {
+          return engine.slides.map((_, i) => build(i));
+        }
+        // 通常編集は「今触っているスライド」の分だけ差し替える
+        const next = prev.slice();
+        next[engine.current] = build(engine.current);
+        return next;
+      });
     }, THUMB_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [engine, version]);
@@ -75,7 +96,7 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
           onClick={() => engine.setCurrent(i)}
         >
           <div className="thumb-frame" style={{ height: thumbHeight }}>
-            {thumbHtml && visible.has(i) && (
+            {htmls[i] && visible.has(i) && (
               <iframe
                 title={`スライド ${i + 1}`}
                 tabIndex={-1}
@@ -84,7 +105,7 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
                   const doc = (e.currentTarget as HTMLIFrameElement).contentDocument;
                   if (doc) finishAllAnimations(doc);
                 }}
-                srcDoc={injectStyleIntoHtml(thumbHtml, onlySlideCss(i))}
+                srcDoc={htmls[i]}
                 style={{
                   width: sw,
                   height: sh,

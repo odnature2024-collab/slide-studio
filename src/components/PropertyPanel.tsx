@@ -193,11 +193,7 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
           {!isSlide && (
             <button
               className="small-btn danger"
-              onClick={() => {
-                el.remove();
-                engine.select(null);
-                engine.commit();
-              }}
+              onClick={() => engine.deleteSelection()}
             >
               削除
             </button>

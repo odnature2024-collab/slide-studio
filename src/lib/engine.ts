@@ -85,6 +85,9 @@ export class EditorEngine {
    *  （移動・リサイズ・角丸など色に無関係な編集では再抽出しない＝軽量化） */
   colorEpoch = 0;
   private colorsDirty = false;
+  /** スライドの追加・削除・並べ替えの通し番号。サムネイル一覧の全再生成の合図
+   *  （通常の要素編集ではこれは増えず、そのスライドのサムネイルだけ更新される） */
+  structureEpoch = 0;
 
   /** 構造的な変更（履歴・パネル更新が必要）の通知 */
   onUpdate: () => void = () => {};
@@ -120,6 +123,7 @@ export class EditorEngine {
     this.loaded = true;
     this.themeOps = [];
     this.colorEpoch++; // 新しい文書のパレットを1回抽出させる
+    this.structureEpoch++; // サムネイル一覧を作り直す
     this.isInitialLoad = true;
     this.writeToIframe(file.text);
     this.onUpdate();
@@ -218,8 +222,9 @@ export class EditorEngine {
 
   private restore(html: string): void {
     this.dirty = true;
-    // undo/redo は色が変わっている可能性があるのでパレットを取り直す
+    // undo/redo は色・構成が変わっている可能性があるので取り直す
     this.colorEpoch++;
+    this.structureEpoch++;
     this.writeToIframe(html); // onLoad で再初期化される
   }
 
@@ -272,6 +277,7 @@ export class EditorEngine {
     src.after(clone);
     this.slides.splice(index + 1, 0, clone);
     markSlides(doc, this.slides);
+    this.structureEpoch++;
     this.setCurrent(index + 1);
     this.commit();
   }
@@ -282,6 +288,7 @@ export class EditorEngine {
     this.slides[index].remove();
     this.slides.splice(index, 1);
     markSlides(doc, this.slides);
+    this.structureEpoch++;
     this.current = Math.min(this.current, this.slides.length - 1);
     this.select(null);
     setActiveSlide(this.slides, this.current, this.stateClass);
@@ -299,6 +306,7 @@ export class EditorEngine {
     this.slides.splice(index, 1);
     this.slides.splice(target, 0, el);
     markSlides(doc, this.slides);
+    this.structureEpoch++;
     this.current = target;
     setActiveSlide(this.slides, this.current, this.stateClass);
     this.commit();
@@ -648,8 +656,12 @@ export class EditorEngine {
   deleteSelection(): void {
     const els = this.movableSelection();
     if (els.length === 0) return;
+    const slide = this.activeSlide();
     for (const el of els) el.remove();
     this.select(null);
+    // Safari は合成レイヤーを持つ要素（position:absolute の図形・translate 済み要素など）
+    // を消すと消え残りのゴーストが出ることがあるため、スライドの再描画を強制する
+    if (slide) forceRepaint(slide);
     this.commit();
   }
 
@@ -1059,6 +1071,18 @@ function readAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * 要素の再描画を強制する（Safari の合成レイヤー消え残り＝ゴースト対策）。
+ * display を一瞬 none にして同一フレーム内で戻すと、レイアウトツリーが作り直され
+ * 消え残ったピクセルがクリアされる。同期処理なので画面のちらつきは出ない。
+ */
+function forceRepaint(el: HTMLElement): void {
+  const prev = el.style.display;
+  el.style.display = "none";
+  void el.offsetHeight; // リフローを強制
+  el.style.display = prev;
 }
 
 /** CSS translate プロパティ値（"" | "none" | "10px 5px" | "10px"）を [x, y] に解釈する */
