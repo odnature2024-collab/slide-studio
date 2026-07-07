@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/slide-studio/sw.js', { scope: '/slide-studio/' })})}
