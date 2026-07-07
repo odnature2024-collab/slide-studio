@@ -10,6 +10,7 @@ import EditorCanvas from "./components/EditorCanvas";
 import PropertyPanel from "./components/PropertyPanel";
 import ThemePanel from "./components/ThemePanel";
 import PresentModal from "./components/PresentModal";
+import { enterFullscreen, exitFullscreen } from "./lib/fullscreen";
 
 type SideTab = "theme" | "props";
 
@@ -154,7 +155,11 @@ export default function App() {
         engine={engine}
         version={version}
         shapeFill={shapeFill}
-        onPresent={() => setPresenting(true)}
+        onPresent={() => {
+          // 全画面要求はタップ操作の中で行う（ブラウザの枠を隠す）
+          void enterFullscreen();
+          setPresenting(true);
+        }}
       />
 
       {engine.loaded ? (
@@ -216,7 +221,15 @@ export default function App() {
         </div>
       )}
 
-      {presenting && <PresentModal engine={engine} onClose={() => setPresenting(false)} />}
+      {presenting && (
+        <PresentModal
+          engine={engine}
+          onClose={() => {
+            void exitFullscreen();
+            setPresenting(false);
+          }}
+        />
+      )}
     </div>
   );
 }

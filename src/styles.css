@@ -891,7 +891,8 @@ input[type="range"] {
 
 .present-tools {
   position: fixed;
-  top: 12px;
+  /* iPad のセーフエリア（ステータスバー領域）を避けつつ、画面最上部に配置 */
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;

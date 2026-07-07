@@ -245,6 +245,20 @@ export default function PresentModal({ engine, onClose }: Props) {
     };
   }, [total, onClose, tool]);
 
+  // 全画面をシステム操作（スワイプ・Esc）で抜けたらプレゼンも終了して整合させる
+  useEffect(() => {
+    const onFsChange = () => {
+      const fs = document.fullscreenElement || (document as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      if (!fs) onClose();
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+    };
+  }, [onClose]);
+
   // ---- キャンバス描画 ----
 
   const indexRef = useRef(index);
