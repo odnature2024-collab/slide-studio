@@ -777,17 +777,12 @@ export class EditorEngine {
     this.alignToRect(els, slide.getBoundingClientRect(), cmd);
   }
 
-  /** 複数選択した要素同士を、選択全体の外接矩形を基準に整列する */
+  /** 複数選択した要素同士を、最初に選択した要素を基準に整列する */
   alignSelection(cmd: AlignCommand): void {
     const els = this.movableSelection();
     if (els.length < 2) return;
-    const rects = els.map((el) => el.getBoundingClientRect());
-    this.alignToRect(els, {
-      left: Math.min(...rects.map((r) => r.left)),
-      right: Math.max(...rects.map((r) => r.right)),
-      top: Math.min(...rects.map((r) => r.top)),
-      bottom: Math.max(...rects.map((r) => r.bottom)),
-    }, cmd);
+    const anchor = els[0].getBoundingClientRect();
+    this.alignToRect(els, anchor, cmd);
   }
 
   private alignToRect(

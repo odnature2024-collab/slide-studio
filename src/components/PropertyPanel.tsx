@@ -136,6 +136,8 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
           </div>
         </div>
         <div className="placeholder" style={{ padding: "6px 0", textAlign: "left" }}>
+          最初に選択した要素の位置を基準に整列します。
+          <br />
           Shift+クリックまたは複数選択モードで選択を追加・解除できます。
           選択の内側をドラッグするとまとめて移動します。
         </div>

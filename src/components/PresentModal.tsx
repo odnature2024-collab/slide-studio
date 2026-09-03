@@ -35,7 +35,7 @@ const MARKER_WIDTH_MAX = 40;
 /** 万年筆らしいインクの濃度（わずかに透ける） */
 const INK_ALPHA = 0.92;
 /** 蛍光マーカーの透け具合 */
-const MARKER_ALPHA = 0.24;
+const MARKER_ALPHA = 0.3;
 
 interface InkPoint {
   x: number;
