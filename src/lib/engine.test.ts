@@ -102,3 +102,36 @@ describe("EditorEngine — 複数要素の整列基準", () => {
     expect(engine.selection).toEqual([anchor, follower]);
   });
 });
+
+describe("EditorEngine — 要素のコピー＆ペースト", () => {
+  it("同じスライドでは少しずらし、別スライドでは同じ位置へ貼り付ける", () => {
+    const { engine, doc } = buildEngine();
+    const sourceSlide = engine.activeSlide()!;
+    const source = doc.createElement("div");
+    source.textContent = "copy me";
+    source.style.translate = "20px 10px";
+    sourceSlide.append(source);
+    mockRect(sourceSlide, { left: 20, top: 30, width: 1122, height: 793 });
+    mockRect(source, { left: 120, top: 110, width: 80, height: 40 });
+    engine.select(source);
+
+    expect(engine.copySelection()).toBe(true);
+    expect(engine.pasteClipboard()).toBe(true);
+    const sameSlideCopy = engine.selected as HTMLElement;
+    expect(sameSlideCopy).not.toBe(source);
+    expect(sameSlideCopy.style.left).toBe("112px");
+    expect(sameSlideCopy.style.top).toBe("92px");
+    expect(sameSlideCopy.style.translate).toBe("");
+
+    engine.setCurrent(1);
+    const destinationSlide = engine.activeSlide()!;
+    mockRect(destinationSlide, { left: 40, top: 50, width: 1122, height: 793 });
+    expect(engine.pasteClipboard()).toBe(true);
+    const crossSlideCopy = engine.selected as HTMLElement;
+    expect(crossSlideCopy.textContent).toBe("copy me");
+    expect(crossSlideCopy.style.left).toBe("100px");
+    expect(crossSlideCopy.style.top).toBe("80px");
+    expect(crossSlideCopy.style.width).toBe("80px");
+    expect(crossSlideCopy.style.height).toBe("40px");
+  });
+});

@@ -81,12 +81,12 @@ export default function App() {
 
   // グローバルショートカット（iframe 外にフォーカスがあるときも効くように）
   useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    };
     const onKey = (ev: KeyboardEvent) => {
-      const target = ev.target as HTMLElement | null;
-      const typing =
-        target &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
-      if (typing) {
+      if (isTypingTarget(ev.target)) {
         if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "s") {
           ev.preventDefault();
           if (ev.shiftKey) void engine.saveAs();
@@ -96,8 +96,24 @@ export default function App() {
       }
       engine.handleKeyDown(ev);
     };
+    const onCopy = (ev: ClipboardEvent) => {
+      if (!engine.editingEl && !isTypingTarget(ev.target) && engine.copySelection()) {
+        ev.preventDefault();
+      }
+    };
+    const onPaste = (ev: ClipboardEvent) => {
+      if (!engine.editingEl && !isTypingTarget(ev.target) && engine.pasteClipboard()) {
+        ev.preventDefault();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+    };
   }, [engine]);
 
   // 未保存のまま閉じようとしたら警告

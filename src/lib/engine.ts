@@ -46,6 +46,20 @@ interface DragState {
   items: Array<{ el: StylableElement; base: TranslateBase }>;
 }
 
+interface ElementClipboardItem {
+  html: string;
+  left: number;
+  top: number;
+  width: string;
+  height: string;
+  boxSizing: string;
+}
+
+interface ElementClipboard {
+  sourceSlide: HTMLElement;
+  items: ElementClipboardItem[];
+}
+
 export type AlignCommand = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
 
 export interface ResizeStart {
@@ -118,6 +132,8 @@ export class EditorEngine {
   private pointer: PointerState | null = null;
   private drag: DragState | null = null;
   private resizeStart: ResizeStart | null = null;
+  /** アプリ内の要素コピー。スライドを切り替えても保持する */
+  private elementClipboard: ElementClipboard | null = null;
   private editingOriginalHtml = "";
   private nudgeTimer: number | null = null;
   private listenersAbort: AbortController | null = null;
@@ -141,6 +157,7 @@ export class EditorEngine {
     this.dirty = false;
     this.loaded = true;
     this.themeOps = [];
+    this.elementClipboard = null;
     this.colorEpoch++; // 新しい文書のパレットを1回抽出させる
     this.structureEpoch++; // サムネイル一覧を作り直す
     this.isInitialLoad = true;
@@ -555,6 +572,20 @@ export class EditorEngine {
     doc.addEventListener("dblclick", (ev) => this.handleDblClick(ev), opts);
     doc.addEventListener("keydown", (ev) => this.handleKeyDown(ev), opts);
     doc.addEventListener(
+      "copy",
+      (ev) => {
+        if (!this.editingEl && this.copySelection()) ev.preventDefault();
+      },
+      opts
+    );
+    doc.addEventListener(
+      "paste",
+      (ev) => {
+        if (!this.editingEl && this.pasteClipboard()) ev.preventDefault();
+      },
+      opts
+    );
+    doc.addEventListener(
       "dragstart",
       (ev) => {
         if (!this.editingEl) ev.preventDefault();
@@ -765,6 +796,82 @@ export class EditorEngine {
     // を消すと消え残りのゴーストが出ることがあるため、スライドの再描画を強制する
     if (slide) forceRepaint(slide);
     this.commit();
+  }
+
+  /** 選択要素を、スライド左上からの位置とともにアプリ内クリップボードへ保存する */
+  copySelection(): boolean {
+    const slide = this.activeSlide();
+    const els = this.movableSelection();
+    if (!slide || els.length === 0) return false;
+    const slideRect = slide.getBoundingClientRect();
+    const items = els.map((el) => {
+      const rect = el.getBoundingClientRect();
+      const computed = this.getComputed(el);
+      const clone = el.cloneNode(true) as StylableElement;
+      scrubEditorAttributes(clone);
+      // 現在位置は座標として保存するため、ルート要素自身の移動量は二重適用しない。
+      clone.style.removeProperty("translate");
+      return {
+        html: clone.outerHTML,
+        left: rect.left - slideRect.left,
+        top: rect.top - slideRect.top,
+        width: usedCssSize(computed?.width, rect.width),
+        height: usedCssSize(computed?.height, rect.height),
+        boxSizing: computed?.boxSizing || "border-box",
+      };
+    });
+    this.elementClipboard = { sourceSlide: slide, items };
+    return true;
+  }
+
+  /** コピーした要素を現在のスライドへ貼り付ける。別スライドでは元と同じ座標を使う */
+  pasteClipboard(): boolean {
+    const doc = this.doc;
+    const slide = this.activeSlide();
+    const clipboard = this.elementClipboard;
+    if (!doc || !slide || !clipboard || clipboard.items.length === 0) return false;
+    const sameSlide = clipboard.sourceSlide === slide;
+    const offset = sameSlide ? 12 : 0;
+    const slideStyle = this.getComputed(slide);
+    if (slideStyle?.position === "static") slide.style.position = "relative";
+    const slideRect = slide.getBoundingClientRect();
+    const pasted: StylableElement[] = [];
+
+    for (const item of clipboard.items) {
+      const template = doc.createElement("template");
+      template.innerHTML = item.html;
+      const clone = template.content.firstElementChild as StylableElement | null;
+      if (!clone) continue;
+      scrubEditorAttributes(clone);
+      let left = item.left + offset;
+      let top = item.top + offset;
+      clone.style.position = "absolute";
+      clone.style.left = `${Math.round(left)}px`;
+      clone.style.top = `${Math.round(top)}px`;
+      clone.style.right = "auto";
+      clone.style.bottom = "auto";
+      clone.style.margin = "0";
+      clone.style.boxSizing = item.boxSizing;
+      clone.style.width = item.width;
+      clone.style.height = item.height;
+      clone.style.removeProperty("translate");
+      slide.appendChild(clone);
+
+      // transform や罫線を含む要素でも、見た目の左上が保存座標に一致するよう補正する。
+      const actual = clone.getBoundingClientRect();
+      if (actual.width > 0 || actual.height > 0) {
+        left += slideRect.left + item.left + offset - actual.left;
+        top += slideRect.top + item.top + offset - actual.top;
+        clone.style.left = `${Math.round(left)}px`;
+        clone.style.top = `${Math.round(top)}px`;
+      }
+      pasted.push(clone);
+    }
+
+    if (pasted.length === 0) return false;
+    this.setSelection(pasted);
+    this.commit();
+    return true;
   }
 
   // ---- 整列 ----
@@ -989,6 +1096,14 @@ export class EditorEngine {
       if (key === "Escape") this.finishEditing();
       return;
     }
+    if (meta && key.toLowerCase() === "c") {
+      if (this.copySelection()) ev.preventDefault();
+      return;
+    }
+    if (meta && key.toLowerCase() === "v") {
+      if (this.pasteClipboard()) ev.preventDefault();
+      return;
+    }
     if (key === "Escape") {
       this.select(null);
       return;
@@ -1168,6 +1283,21 @@ function readAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function usedCssSize(value: string | undefined, fallback: number): string {
+  if (value && value !== "auto" && Number.isFinite(parseFloat(value))) return value;
+  return `${Math.max(0, fallback)}px`;
+}
+
+/** コピー先へ編集状態を持ち込まないよう、複製要素からアプリ専用属性を除去する */
+function scrubEditorAttributes(root: StylableElement): void {
+  const nodes = [root, ...Array.from(root.querySelectorAll<StylableElement>("*"))];
+  for (const node of nodes) {
+    for (const attr of Array.from(node.attributes)) {
+      if (attr.name.startsWith("data-hse-")) node.removeAttribute(attr.name);
+    }
+  }
 }
 
 /**

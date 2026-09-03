@@ -234,7 +234,7 @@ export default function EditorCanvas({ engine, version }: Props) {
         </div>
       </div>
       <div className="canvas-hint">
-        クリックで選択 ／ Shift+クリックで複数選択 ／ ダブルクリックで文字編集 ／ ドラッグで移動 ／ ⌘Z で元に戻す
+        クリックで選択 ／ Shift+クリックで複数選択 ／ ⌘C・⌘Vでコピー＆ペースト ／ ダブルクリックで文字編集 ／ ドラッグで移動
       </div>
     </div>
   );
