@@ -203,7 +203,7 @@ export class EditorEngine {
   }
 
   private measureSlideSize(): void {
-    const slide = this.activeSlide();
+    const slide = this.slides[this.current];
     if (!slide) return;
     const rect = slide.getBoundingClientRect();
     if (rect.width >= 320 && rect.width <= 4200 && rect.height >= 180 && rect.height <= 4200) {

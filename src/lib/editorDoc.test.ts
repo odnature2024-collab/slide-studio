@@ -8,6 +8,7 @@ import {
   markSlides,
   onlySlideCss,
   syncCounterAttributes,
+  PAGE_CONTAINER_ATTR,
   SLIDE_ATTR,
 } from "./editorDoc";
 
@@ -98,6 +99,31 @@ describe("setActiveSlide + serializeDocument の状態クラス処理", () => {
 });
 
 describe("ページ表示の互換処理", () => {
+  it("共通ページコンテナの画面用余白を除去し、保存時には補正属性を残さない", () => {
+    const doc = buildDoc(`<main class="deck" style="padding:32px 0 80px;gap:36px">
+      <div class="slide-wrap"><section class="slide">1</section></div>
+      <div class="slide-wrap"><section class="slide">2</section></div>
+    </main>`);
+    const roots = Array.from(doc.querySelectorAll<HTMLElement>(".slide-wrap"));
+    const targets = slidesOf(doc);
+    markSlides(doc, roots, targets);
+    const container = doc.querySelector<HTMLElement>(".deck")!;
+    expect(container.hasAttribute(PAGE_CONTAINER_ATTR)).toBe(true);
+
+    const preview = serializeDocument(doc, {
+      keepSlideMarks: true,
+      pruneToSlide: 0,
+    });
+    expect(preview).toContain(PAGE_CONTAINER_ATTR);
+    expect(onlySlideCss(0)).toContain(`[${PAGE_CONTAINER_ATTR}]`);
+
+    const saved = serializeDocument(doc);
+    expect(saved).not.toContain(PAGE_CONTAINER_ATTR);
+    expect(buildDoc(saved).querySelector<HTMLElement>(".deck")!.style.padding).toBe(
+      "32px 0px 80px"
+    );
+  });
+
   it("inline display:none のページは表示中ページの display から補完する", () => {
     const host = document.createElement("div");
     host.innerHTML = `<main>

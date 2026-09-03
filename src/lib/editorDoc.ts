@@ -4,6 +4,7 @@ export const EDITOR_STYLE_ID = "hse-editor-style";
 export const SLIDE_DISPLAY_STYLE_ID = "hse-slide-display-style";
 export const SLIDE_ATTR = "data-hse-slide";
 export const STATE_TARGET_ATTR = "data-hse-state-target";
+export const PAGE_CONTAINER_ATTR = "data-hse-page-container";
 export const HIDDEN_ATTR = "data-hse-hidden";
 export const SELECTED_ATTR = "data-hse-selected";
 /** スライド外の固定 UI（デッキ自身のページ送りボタン等）を編集・プレビューで隠すマーク */
@@ -31,6 +32,7 @@ export function injectEditorStyle(doc: Document): void {
   style.textContent = `
 [${HIDDEN_ATTR}] { display: none !important; }
 [${CHROME_ATTR}] { display: none !important; }
+[${PAGE_CONTAINER_ATTR}] { margin: 0 !important; padding: 0 !important; gap: 0 !important; border: 0 !important; }
 [${SLIDE_ATTR}]:not([${HIDDEN_ATTR}]) { opacity: 1 !important; visibility: visible !important; }
 html, body { overflow: hidden !important; margin: 0 !important; }
 /* iPad: タッチをスクロール等のジェスチャに取られず、選択・ドラッグ操作に使う */
@@ -65,8 +67,15 @@ export function markSlides(
   for (const el of Array.from(doc.querySelectorAll(`[${STATE_TARGET_ATTR}]`))) {
     el.removeAttribute(STATE_TARGET_ATTR);
   }
+  for (const el of Array.from(doc.querySelectorAll(`[${PAGE_CONTAINER_ATTR}]`))) {
+    el.removeAttribute(PAGE_CONTAINER_ATTR);
+  }
   slides.forEach((el, i) => el.setAttribute(SLIDE_ATTR, String(i)));
   stateTargets.forEach((el, i) => el.setAttribute(STATE_TARGET_ATTR, String(i)));
+  const pageContainer = slides[0]?.parentElement;
+  if (pageContainer && slides.every((el) => el.parentElement === pageContainer)) {
+    pageContainer.setAttribute(PAGE_CONTAINER_ATTR, "");
+  }
 }
 
 /** JS 制御のプレゼンでよく使われる「表示中」を表すクラス名の候補 */
@@ -343,7 +352,12 @@ export function serializeDocument(doc: Document, options: SerializeOptions = {})
     for (const attr of Array.from(el.attributes)) {
       if (!attr.name.startsWith("data-hse-")) continue;
       // サムネイル・プレビュー用には連番マークとチロームマークを残す
-      if (options.keepSlideMarks && (attr.name === SLIDE_ATTR || attr.name === CHROME_ATTR)) {
+      if (
+        options.keepSlideMarks &&
+        (attr.name === SLIDE_ATTR ||
+          attr.name === CHROME_ATTR ||
+          attr.name === PAGE_CONTAINER_ATTR)
+      ) {
         continue;
       }
       el.removeAttribute(attr.name);
@@ -424,6 +438,7 @@ export function onlySlideCss(
 [${SLIDE_ATTR}="${index}"] { display: ${activeDisplay} !important; opacity: 1 !important; visibility: visible !important; }
 [${STATE_TARGET_ATTR}="${index}"] { display: ${activeTargetDisplay} !important; opacity: 1 !important; visibility: visible !important; }
 [${CHROME_ATTR}] { display: none !important; }
+[${PAGE_CONTAINER_ATTR}] { margin: 0 !important; padding: 0 !important; gap: 0 !important; border: 0 !important; }
 html, body { overflow: hidden !important; margin: 0 !important; background: transparent; }
 ${options.instantAnimation === false ? "" : INSTANT_ANIMATION_CSS}
 `;
