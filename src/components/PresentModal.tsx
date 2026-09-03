@@ -22,8 +22,8 @@ const PEN_COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#0a84ff"];
 const MARKER_COLORS = ["#ffeb3b", "#b2ff59", "#ff80ab", "#40c4ff", "#ffab40"];
 
 /** 消えるペン: 手が止まってから待つ時間と、消えるのにかかる時間 */
-const FADE_IDLE_MS = 1200;
-const FADE_DURATION_MS = 700;
+const FADE_IDLE_MS = 1000;
+const FADE_DURATION_MS = 500;
 /** ペンの基本の太さ（スライダーで変更可能） */
 const PEN_WIDTH_DEFAULT = 4;
 const PEN_WIDTH_MIN = 1.5;
@@ -35,7 +35,7 @@ const MARKER_WIDTH_MAX = 40;
 /** 万年筆らしいインクの濃度（わずかに透ける） */
 const INK_ALPHA = 0.92;
 /** 蛍光マーカーの透け具合 */
-const MARKER_ALPHA = 0.38;
+const MARKER_ALPHA = 0.24;
 
 interface InkPoint {
   x: number;
@@ -185,7 +185,7 @@ export default function PresentModal({ engine, onClose }: Props) {
   const pointerDotRef = useRef<HTMLDivElement>(null);
   const permStrokesRef = useRef<Map<number, Stroke[]>>(new Map());
   const fadeStrokesRef = useRef<Stroke[]>([]);
-  /** 消えるペンを最後に動かした時刻。ここから1.2秒止まるとフェード開始 */
+  /** 消えるペンを最後に動かした時刻。ここから1秒止まるとフェード開始 */
   const fadeActivityRef = useRef(0);
   const drawingRef = useRef<Stroke | null>(null);
   /** 描画中のポインタ ID（パームや他の指のイベントを混ぜないため） */
@@ -267,7 +267,7 @@ export default function PresentModal({ engine, onClose }: Props) {
     for (const stroke of permStrokesRef.current.get(indexRef.current) ?? []) {
       drawStroke(ctx, stroke, 1);
     }
-    // 消えるペン: 書いている間・手が止まって 1.2 秒までは全部残し、
+    // 消えるペン: 書いている間・手が止まって 1 秒までは全部残し、
     // その後は全ストロークが一緒にふわっと消える
     if (fadeStrokesRef.current.length > 0) {
       // 描画中（図形スナップのホールド中を含む）はフェードさせない
@@ -296,12 +296,19 @@ export default function PresentModal({ engine, onClose }: Props) {
       if (offCtx) {
         offCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         offCtx.clearRect(0, 0, off.width / dpr, off.height / dpr);
-        for (const stroke of fadeStrokesRef.current) drawStrokeRaw(offCtx, stroke, 1);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.globalAlpha = alpha * INK_ALPHA;
-        ctx.drawImage(off, 0, 0);
-        ctx.globalAlpha = 1;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // ペンとマーカーを別々に合成し、消えるマーカーにも通常マーカーと同じ透過率を使う。
+        // 同種の線は一度オフスクリーンで結合するため、線分の継ぎ目も濃くならない。
+        for (const kind of ["pen", "marker"] as const) {
+          offCtx.clearRect(0, 0, off.width / dpr, off.height / dpr);
+          for (const stroke of fadeStrokesRef.current) {
+            if (stroke.kind === kind) drawStrokeRaw(offCtx, stroke, 1);
+          }
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.globalAlpha = alpha * (kind === "marker" ? MARKER_ALPHA : INK_ALPHA);
+          ctx.drawImage(off, 0, 0);
+          ctx.globalAlpha = 1;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
       }
       return true;
     }
@@ -686,7 +693,7 @@ export default function PresentModal({ engine, onClose }: Props) {
         </button>
         <button
           className={`present-tool ${tool === "fade" ? "on" : ""}`}
-          title="自動で消えるペン（手を止めると1.2秒後にふわっと消えます）"
+          title="自動で消えるペン（手を止めると約1秒後にふわっと消えます）"
           onClick={() => toggleTool("fade")}
         >
           <ToolIcon d="M3 21l1-4L16 5l3 3L7 20l-4 1zM19 14v0.01M21 11v0.01M22 7v0.01" />
@@ -700,7 +707,7 @@ export default function PresentModal({ engine, onClose }: Props) {
         </button>
         <button
           className={`present-tool ${tool === "fadeMarker" ? "on" : ""}`}
-          title="自動で消える蛍光マーカー（手を止めると1.2秒後にふわっと消えます）"
+          title="自動で消える蛍光マーカー（手を止めると約1秒後にふわっと消えます）"
           onClick={() => toggleTool("fadeMarker")}
         >
           <ToolIcon d="M4 21h9M7 17l6-9 4 3-6 9H7v-3zM18 15v.01M20 12v.01M21 8v.01" />

@@ -1,7 +1,7 @@
 // 左パネル：スライドのサムネイル一覧と並べ替え・複製・削除
 // パフォーマンスのため、画面内（付近）にあるサムネイルだけ iframe を生成する
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
 import { finishAllAnimations } from "../lib/editorDoc";
 
@@ -21,8 +21,25 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
   const [htmls, setHtmls] = useState<string[]>([]);
   const [visible, setVisible] = useState<Set<number>>(new Set());
   const panelRef = useRef<HTMLElement>(null);
+  const thumbSizerRef = useRef<HTMLDivElement>(null);
+  const [thumbWidth, setThumbWidth] = useState(Math.max(80, panelWidth - 40));
   const lastStructRef = useRef(-1);
   const lastColorRef = useRef(-1);
+
+  // スクロールバー幅や枠線を固定値で推測せず、実際の表示枠の内幅に縮尺を合わせる。
+  // これによりOS・パネル幅にかかわらずサムネイル右端まで収まる。
+  useLayoutEffect(() => {
+    const frame = thumbSizerRef.current;
+    if (!frame) return;
+    const measure = () => {
+      const width = frame.clientWidth;
+      if (width > 0) setThumbWidth(width);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [engine.slides.length, panelWidth]);
 
   // サムネイルの再生成は変更が落ち着いてから（負荷対策）
   useEffect(() => {
@@ -90,7 +107,6 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
   }, [engine.slides.length, panelWidth]);
 
   const { width: sw, height: sh } = engine.slideSize;
-  const thumbWidth = Math.max(80, panelWidth - 28);
   const scale = thumbWidth / sw;
   const thumbHeight = Math.round(sh * scale);
 
@@ -104,7 +120,11 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
           className={`thumb ${i === engine.current ? "active" : ""}`}
           onClick={() => engine.setCurrent(i)}
         >
-          <div className="thumb-frame" style={{ height: thumbHeight }}>
+          <div
+            ref={i === 0 ? thumbSizerRef : undefined}
+            className="thumb-frame"
+            style={{ height: thumbHeight }}
+          >
             {htmls[i] && visible.has(i) && (
               <iframe
                 title={`スライド ${i + 1}`}
