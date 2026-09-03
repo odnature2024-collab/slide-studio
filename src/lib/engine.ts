@@ -60,6 +60,93 @@ interface ElementClipboard {
   items: ElementClipboardItem[];
 }
 
+/** 親スライドのCSSに依存せず、貼り付け後も見た目を保つために固定する表示プロパティ */
+const COPIED_STYLE_PROPERTIES = [
+  "color",
+  "background-color",
+  "background-image",
+  "background-position",
+  "background-size",
+  "background-repeat",
+  "font-family",
+  "font-size",
+  "font-weight",
+  "font-style",
+  "line-height",
+  "letter-spacing",
+  "text-align",
+  "text-decoration",
+  "text-transform",
+  "text-shadow",
+  "white-space",
+  "word-break",
+  "-webkit-text-fill-color",
+  "display",
+  "box-sizing",
+  "width",
+  "height",
+  "min-width",
+  "min-height",
+  "max-width",
+  "max-height",
+  "padding-top",
+  "padding-right",
+  "padding-bottom",
+  "padding-left",
+  "margin-top",
+  "margin-right",
+  "margin-bottom",
+  "margin-left",
+  "border-top-color",
+  "border-right-color",
+  "border-bottom-color",
+  "border-left-color",
+  "border-top-style",
+  "border-right-style",
+  "border-bottom-style",
+  "border-left-style",
+  "border-top-width",
+  "border-right-width",
+  "border-bottom-width",
+  "border-left-width",
+  "border-radius",
+  "box-shadow",
+  "opacity",
+  "overflow",
+  "object-fit",
+  "object-position",
+  "position",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "z-index",
+  "transform",
+  "transform-origin",
+  "filter",
+  "clip-path",
+  "flex-direction",
+  "flex-wrap",
+  "flex-grow",
+  "flex-shrink",
+  "flex-basis",
+  "align-items",
+  "align-self",
+  "justify-content",
+  "gap",
+  "grid-template-columns",
+  "grid-template-rows",
+  "grid-column",
+  "grid-row",
+  "fill",
+  "fill-opacity",
+  "stroke",
+  "stroke-width",
+  "stroke-opacity",
+  "stroke-linecap",
+  "stroke-linejoin",
+] as const;
+
 export type AlignCommand = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
 
 export interface ResizeStart {
@@ -808,6 +895,7 @@ export class EditorEngine {
       const rect = el.getBoundingClientRect();
       const computed = this.getComputed(el);
       const clone = el.cloneNode(true) as StylableElement;
+      inlineCopiedStyles(el, clone, (node) => this.getComputed(node));
       scrubEditorAttributes(clone);
       // 現在位置は座標として保存するため、ルート要素自身の移動量は二重適用しない。
       clone.style.removeProperty("translate");
@@ -1288,6 +1376,25 @@ function readAsDataUrl(file: File): Promise<string> {
 function usedCssSize(value: string | undefined, fallback: number): string {
   if (value && value !== "auto" && Number.isFinite(parseFloat(value))) return value;
   return `${Math.max(0, fallback)}px`;
+}
+
+/** 元要素と複製要素を同じ順でたどり、実際に表示されているスタイルをインライン化する */
+function inlineCopiedStyles(
+  source: StylableElement,
+  clone: StylableElement,
+  getComputed: (el: Element) => CSSStyleDeclaration | null
+): void {
+  const sourceNodes = [source, ...Array.from(source.querySelectorAll<StylableElement>("*"))];
+  const cloneNodes = [clone, ...Array.from(clone.querySelectorAll<StylableElement>("*"))];
+  for (let i = 0; i < sourceNodes.length; i++) {
+    const target = cloneNodes[i];
+    if (!target) break;
+    const computed = getComputed(sourceNodes[i]) ?? sourceNodes[i].style;
+    for (const property of COPIED_STYLE_PROPERTIES) {
+      const value = computed.getPropertyValue(property);
+      if (value) target.style.setProperty(property, value);
+    }
+  }
 }
 
 /** コピー先へ編集状態を持ち込まないよう、複製要素からアプリ専用属性を除去する */

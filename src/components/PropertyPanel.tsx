@@ -89,8 +89,21 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
   }, [engine, el]);
 
   const [fontSize, setFontSize] = useState(16);
+  const [lineHeight, setLineHeight] = useState(1.2);
+  const [letterSpacing, setLetterSpacing] = useState(0);
   useEffect(() => {
-    if (computed) setFontSize(Math.round(parseFloat(computed.fontSize) || 16));
+    if (computed) {
+      const size = parseFloat(computed.fontSize) || 16;
+      const computedLineHeight = parseFloat(computed.lineHeight);
+      setFontSize(Math.round(size));
+      setLineHeight(
+        Number.isFinite(computedLineHeight)
+          ? Math.round((computedLineHeight / size) * 100) / 100
+          : 1.2
+      );
+      const spacing = parseFloat(computed.letterSpacing);
+      setLetterSpacing(Number.isFinite(spacing) ? Math.round(spacing * 10) / 10 : 0);
+    }
     // 選択の変更時と、確定編集（リサイズによる文字スケール等）の後に同期する
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [el, version]);
@@ -165,6 +178,20 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
     setFontSize(v);
     if (commit) engine.applyStyle("font-size", `${v}px`);
     else engine.applyStyleTransient("font-size", `${v}px`);
+  };
+
+  const applyLineHeight = (v: number, commit: boolean) => {
+    const next = Math.round(v * 100) / 100;
+    setLineHeight(next);
+    if (commit) engine.applyStyle("line-height", String(next));
+    else engine.applyStyleTransient("line-height", String(next));
+  };
+
+  const applyLetterSpacing = (v: number, commit: boolean) => {
+    const next = Math.round(v * 10) / 10;
+    setLetterSpacing(next);
+    if (commit) engine.applyStyle("letter-spacing", `${next}px`);
+    else engine.applyStyleTransient("letter-spacing", `${next}px`);
   };
 
   const bringForward = (delta: number) => {
@@ -394,6 +421,48 @@ export default function PropertyPanel({ engine, version, palette }: Props) {
                 </optgroup>
               ))}
             </select>
+          </div>
+          <div className="row">
+            <span className="row-label">行間</span>
+            <SmoothSlider
+              min={0.8}
+              max={3}
+              step={0.05}
+              value={lineHeight}
+              title={`行間: ${lineHeight}`}
+              onInput={(v) => applyLineHeight(v, false)}
+              onCommit={() => engine.commit()}
+            />
+            <input
+              type="number"
+              min={0.6}
+              max={5}
+              step={0.05}
+              value={lineHeight}
+              onChange={(e) => applyLineHeight(parseFloat(e.target.value) || 1.2, true)}
+              title="行間（文字サイズに対する倍率）"
+            />
+          </div>
+          <div className="row">
+            <span className="row-label">文字間</span>
+            <SmoothSlider
+              min={-10}
+              max={30}
+              step={0.5}
+              value={letterSpacing}
+              title={`文字間: ${letterSpacing}px`}
+              onInput={(v) => applyLetterSpacing(v, false)}
+              onCommit={() => engine.commit()}
+            />
+            <input
+              type="number"
+              min={-20}
+              max={100}
+              step={0.5}
+              value={letterSpacing}
+              onChange={(e) => applyLetterSpacing(parseFloat(e.target.value) || 0, true)}
+              title="文字間隔(px)"
+            />
           </div>
           <div className="row">
             <span className="row-label">スタイル</span>

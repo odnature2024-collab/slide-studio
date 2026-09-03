@@ -108,9 +108,35 @@ describe("EditorEngine — 要素のコピー＆ペースト", () => {
     const { engine, doc } = buildEngine();
     const sourceSlide = engine.activeSlide()!;
     const source = doc.createElement("div");
+    const sourceChild = doc.createElement("span");
+    const style = doc.createElement("style");
+    style.textContent = `
+      .copied-card { color: rgb(12, 34, 56); background-color: rgb(240, 220, 80); font-size: 32px; }
+      .copied-card > span { color: rgb(210, 20, 40); font-size: 18px; font-weight: 700; }
+    `;
+    doc.head.append(style);
+    source.className = "copied-card";
     source.textContent = "copy me";
+    sourceChild.textContent = "child";
+    source.append(sourceChild);
     source.style.translate = "20px 10px";
     sourceSlide.append(source);
+    const sourceComputed = doc.createElement("div").style;
+    sourceComputed.color = "rgb(12, 34, 56)";
+    sourceComputed.backgroundColor = "rgb(240, 220, 80)";
+    sourceComputed.fontSize = "32px";
+    sourceComputed.width = "80px";
+    sourceComputed.height = "40px";
+    sourceComputed.boxSizing = "border-box";
+    const childComputed = doc.createElement("span").style;
+    childComputed.color = "rgb(210, 20, 40)";
+    childComputed.fontSize = "18px";
+    childComputed.fontWeight = "700";
+    vi.spyOn(engine, "getComputed").mockImplementation((el) => {
+      if (el === source) return sourceComputed;
+      if (el === sourceChild) return childComputed;
+      return null;
+    });
     mockRect(sourceSlide, { left: 20, top: 30, width: 1122, height: 793 });
     mockRect(source, { left: 120, top: 110, width: 80, height: 40 });
     engine.select(source);
@@ -128,10 +154,17 @@ describe("EditorEngine — 要素のコピー＆ペースト", () => {
     mockRect(destinationSlide, { left: 40, top: 50, width: 1122, height: 793 });
     expect(engine.pasteClipboard()).toBe(true);
     const crossSlideCopy = engine.selected as HTMLElement;
-    expect(crossSlideCopy.textContent).toBe("copy me");
+    expect(crossSlideCopy.firstChild?.textContent).toBe("copy me");
     expect(crossSlideCopy.style.left).toBe("100px");
     expect(crossSlideCopy.style.top).toBe("80px");
     expect(crossSlideCopy.style.width).toBe("80px");
     expect(crossSlideCopy.style.height).toBe("40px");
+    expect(crossSlideCopy.style.color).toBe("rgb(12, 34, 56)");
+    expect(crossSlideCopy.style.backgroundColor).toBe("rgb(240, 220, 80)");
+    expect(crossSlideCopy.style.fontSize).toBe("32px");
+    const copiedChild = crossSlideCopy.querySelector("span") as HTMLElement;
+    expect(copiedChild.style.color).toBe("rgb(210, 20, 40)");
+    expect(copiedChild.style.fontSize).toBe("18px");
+    expect(copiedChild.style.fontWeight).toBe("700");
   });
 });
