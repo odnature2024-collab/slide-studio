@@ -3,14 +3,19 @@
 import { detectSlides } from "./slideDetector";
 import {
   injectEditorStyle,
+  injectSlideDisplayStyles,
+  inferSlideDisplays,
   markSlides,
   markChromeElements,
   finishAllAnimations,
   setActiveSlide,
   serializeDocument,
+  injectStyleIntoHtml,
+  onlySlideCss,
   detectStateClass,
   syncCounterAttributes,
   SELECTED_ATTR,
+  STATE_TARGET_ATTR,
   type SlideStateClass,
 } from "./editorDoc";
 import { SnapshotHistory } from "./history";
@@ -57,12 +62,26 @@ export interface ResizeStart {
   isImage: boolean;
 }
 
+export interface SlideRenderOptions {
+  /** false のときは元HTMLのCSSアニメーションを再生する */
+  instantAnimation?: boolean;
+  /** 注入するページ切替スタイルの id */
+  styleId?: string;
+}
+
 const NUDGE_COMMIT_DELAY = 600;
 
 export class EditorEngine {
   iframe: HTMLIFrameElement | null = null;
   doc: Document | null = null;
+  /** 表示・並べ替え・複製・削除の単位になるページルート */
   slides: HTMLElement[] = [];
+  /** active/current 等の状態クラスを持つ、実際のスライド内容 */
+  stateTargets: HTMLElement[] = [];
+  /** 各ページが表示中に使う display 値 */
+  slideDisplays: string[] = [];
+  /** 状態クラス対象（内側の .slide 等）が表示中に使う display 値 */
+  stateTargetDisplays: string[] = [];
   stateClass: SlideStateClass | null = null;
   detectionMethod = "";
   detectionConfident = true;
@@ -151,12 +170,26 @@ export class EditorEngine {
     injectEditorStyle(doc);
     const detection = detectSlides(doc);
     this.slides = detection.slides;
+    this.stateTargets = detection.stateTargets;
     this.detectionMethod = detection.method;
     this.detectionConfident = detection.confident;
     this.current = Math.min(this.current, Math.max(0, this.slides.length - 1));
-    markSlides(doc, this.slides);
-    this.stateClass = detectStateClass(doc, this.slides);
-    setActiveSlide(this.slides, this.current, this.stateClass);
+    markSlides(doc, this.slides, this.stateTargets);
+    this.stateClass = detectStateClass(doc, this.stateTargets);
+    this.slideDisplays = inferSlideDisplays(
+      doc,
+      this.slides,
+      this.stateTargets,
+      this.stateClass
+    );
+    this.stateTargetDisplays = inferSlideDisplays(
+      doc,
+      this.stateTargets,
+      this.stateTargets,
+      this.stateClass
+    );
+    injectSlideDisplayStyles(doc, this.slideDisplays, this.stateTargetDisplays);
+    setActiveSlide(this.slides, this.current, this.stateClass, this.stateTargets);
     markChromeElements(doc, this.slides);
     finishAllAnimations(doc);
     this.measureSlideSize();
@@ -170,7 +203,7 @@ export class EditorEngine {
   }
 
   private measureSlideSize(): void {
-    const slide = this.slides[this.current];
+    const slide = this.activeSlide();
     if (!slide) return;
     const rect = slide.getBoundingClientRect();
     if (rect.width >= 320 && rect.width <= 4200 && rect.height >= 180 && rect.height <= 4200) {
@@ -189,6 +222,30 @@ export class EditorEngine {
       // 保存・履歴は読み込み時の状態クラスに戻す
       stateMode: keepSlideMarks ? "all" : "original",
     });
+  }
+
+  /**
+   * サムネイル・プレゼン・PDF用に、指定ページ以外を軽量化したHTMLを返す。
+   * 元デッキ全体のCSSと祖先・兄弟構造は保ち、他ページの画像や本文は含めない。
+   */
+  serializeSlide(index: number, options: SlideRenderOptions = {}): string {
+    if (!this.doc || index < 0 || index >= this.slides.length) return "";
+    const html = serializeDocument(this.doc, {
+      keepSlideMarks: true,
+      stateClass: this.stateClass ?? undefined,
+      stateMode: "single",
+      activeIndex: index,
+      pruneToSlide: index,
+    });
+    return injectStyleIntoHtml(
+      html,
+      onlySlideCss(index, {
+        instantAnimation: options.instantAnimation,
+        activeDisplay: this.slideDisplays[index],
+        activeTargetDisplay: this.stateTargetDisplays[index],
+      }),
+      options.styleId
+    );
   }
 
   commit(): void {
@@ -263,7 +320,7 @@ export class EditorEngine {
     this.finishEditing();
     this.current = index;
     this.select(null);
-    setActiveSlide(this.slides, index, this.stateClass);
+    setActiveSlide(this.slides, index, this.stateClass, this.stateTargets);
     finishAllAnimations(this.doc);
     this.measureSlideSize();
     this.onUpdate();
@@ -273,10 +330,25 @@ export class EditorEngine {
     const doc = this.doc;
     const src = this.slides[index];
     if (!doc || !src) return;
+    const stateFlags = this.stateHolderFlags();
     const clone = src.cloneNode(true) as HTMLElement;
+    const cloneTarget =
+      (clone.getAttribute(STATE_TARGET_ATTR) === String(index) ? clone : null) ??
+      clone.querySelector<HTMLElement>(`[${STATE_TARGET_ATTR}="${index}"]`) ??
+      clone;
     src.after(clone);
     this.slides.splice(index + 1, 0, clone);
-    markSlides(doc, this.slides);
+    this.stateTargets.splice(index + 1, 0, cloneTarget);
+    this.slideDisplays.splice(index + 1, 0, this.slideDisplays[index] ?? "block");
+    this.stateTargetDisplays.splice(
+      index + 1,
+      0,
+      this.stateTargetDisplays[index] ?? this.slideDisplays[index] ?? "block"
+    );
+    stateFlags.splice(index + 1, 0, false);
+    this.setStateHolderFlags(stateFlags);
+    markSlides(doc, this.slides, this.stateTargets);
+    injectSlideDisplayStyles(doc, this.slideDisplays, this.stateTargetDisplays);
     this.structureEpoch++;
     this.setCurrent(index + 1);
     this.commit();
@@ -285,13 +357,20 @@ export class EditorEngine {
   deleteSlide(index: number): void {
     const doc = this.doc;
     if (!doc || this.slides.length <= 1 || !this.slides[index]) return;
+    const stateFlags = this.stateHolderFlags();
     this.slides[index].remove();
     this.slides.splice(index, 1);
-    markSlides(doc, this.slides);
+    this.stateTargets.splice(index, 1);
+    this.slideDisplays.splice(index, 1);
+    this.stateTargetDisplays.splice(index, 1);
+    stateFlags.splice(index, 1);
+    this.setStateHolderFlags(stateFlags);
+    markSlides(doc, this.slides, this.stateTargets);
+    injectSlideDisplayStyles(doc, this.slideDisplays, this.stateTargetDisplays);
     this.structureEpoch++;
     this.current = Math.min(this.current, this.slides.length - 1);
     this.select(null);
-    setActiveSlide(this.slides, this.current, this.stateClass);
+    setActiveSlide(this.slides, this.current, this.stateClass, this.stateTargets);
     this.commit();
   }
 
@@ -301,21 +380,44 @@ export class EditorEngine {
     if (!doc || target < 0 || target >= this.slides.length) return;
     const el = this.slides[index];
     const other = this.slides[target];
+    const stateFlags = this.stateHolderFlags();
     if (delta < 0) other.before(el);
     else other.after(el);
     this.slides.splice(index, 1);
     this.slides.splice(target, 0, el);
-    markSlides(doc, this.slides);
+    const [stateTarget] = this.stateTargets.splice(index, 1);
+    this.stateTargets.splice(target, 0, stateTarget);
+    const [display] = this.slideDisplays.splice(index, 1);
+    this.slideDisplays.splice(target, 0, display);
+    const [stateTargetDisplay] = this.stateTargetDisplays.splice(index, 1);
+    this.stateTargetDisplays.splice(target, 0, stateTargetDisplay);
+    const [stateFlag] = stateFlags.splice(index, 1);
+    stateFlags.splice(target, 0, stateFlag);
+    this.setStateHolderFlags(stateFlags);
+    markSlides(doc, this.slides, this.stateTargets);
+    injectSlideDisplayStyles(doc, this.slideDisplays, this.stateTargetDisplays);
     this.structureEpoch++;
     this.current = target;
-    setActiveSlide(this.slides, this.current, this.stateClass);
+    setActiveSlide(this.slides, this.current, this.stateClass, this.stateTargets);
     this.commit();
   }
 
   // ---- 選択 ----
 
   activeSlide(): HTMLElement | null {
-    return this.slides[this.current] ?? null;
+    return this.stateTargets[this.current] ?? this.slides[this.current] ?? null;
+  }
+
+  private stateHolderFlags(): boolean[] {
+    if (!this.stateClass) return this.slides.map(() => false);
+    return this.slides.map((_, i) => this.stateClass!.originalHolders.includes(i));
+  }
+
+  private setStateHolderFlags(flags: boolean[]): void {
+    if (!this.stateClass) return;
+    this.stateClass.originalHolders = flags
+      .map((value, i) => (value ? i : -1))
+      .filter((i) => i >= 0);
   }
 
   /** 主選択（複数選択時は先頭の要素）。既存コードとの互換用 */

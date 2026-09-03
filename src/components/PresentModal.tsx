@@ -5,15 +5,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
-import { injectStyleIntoHtml, onlySlideCss } from "../lib/editorDoc";
 import { recognizeShape } from "../lib/shapeRecognizer";
 
 interface Props {
   engine: EditorEngine;
   onClose: () => void;
 }
-
-const STYLE_ID = "hse-present-style";
 
 type Tool = "none" | "pointer" | "pen" | "fade" | "marker" | "fadeMarker";
 
@@ -204,22 +201,13 @@ export default function PresentModal({ engine, onClose }: Props) {
   const inkStateRef = useRef({ lastT: 0, lastW: 0 });
   const total = engine.slides.length;
 
-  // srcdoc は初回だけ生成し、以降はスタイルの差し替えでスライドを切り替える。
-  // プレゼンではスライド本来のアニメーションを活かす（instantAnimation: false）
+  // ページごとの軽量HTMLを読み込む。プレゼンでは元のCSSアニメーションを活かす。
   const html = useMemo(
-    () =>
-      injectStyleIntoHtml(
-        engine.serialize(true),
-        onlySlideCss(engine.current, { instantAnimation: false }),
-        STYLE_ID
-      ),
-    [engine]
+    () => engine.serializeSlide(index, { instantAnimation: false }),
+    [engine, index]
   );
 
   useEffect(() => {
-    const doc = iframeRef.current?.contentDocument;
-    const styleEl = doc?.getElementById(STYLE_ID);
-    if (styleEl) styleEl.textContent = onlySlideCss(index, { instantAnimation: false });
     // スライドを切り替えたら消えるペンの書き込みは消す
     fadeStrokesRef.current = [];
   }, [index]);

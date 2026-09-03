@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { EditorEngine } from "../lib/engine";
-import { injectStyleIntoHtml, onlySlideCss, finishAllAnimations } from "../lib/editorDoc";
+import { finishAllAnimations } from "../lib/editorDoc";
 
 interface Props {
   engine: EditorEngine;
@@ -22,6 +22,7 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
   const [visible, setVisible] = useState<Set<number>>(new Set());
   const panelRef = useRef<HTMLElement>(null);
   const lastStructRef = useRef(-1);
+  const lastColorRef = useRef(-1);
 
   // サムネイルの再生成は変更が落ち着いてから（負荷対策）
   useEffect(() => {
@@ -29,25 +30,33 @@ export default function SlidePanel({ engine, version, panelWidth }: Props) {
       if (!engine.loaded) {
         setHtmls([]);
         lastStructRef.current = -1;
+        lastColorRef.current = -1;
         return;
       }
-      const full = engine.serialize(true);
-      const build = (i: number) => injectStyleIntoHtml(full, onlySlideCss(i));
       const structChanged = engine.structureEpoch !== lastStructRef.current;
+      const colorChanged = engine.colorEpoch !== lastColorRef.current;
       lastStructRef.current = engine.structureEpoch;
+      lastColorRef.current = engine.colorEpoch;
       setHtmls((prev) => {
-        // スライドの追加・削除・並べ替え時、または枚数不一致は全再構築
-        if (structChanged || prev.length !== engine.slides.length) {
-          return engine.slides.map((_, i) => build(i));
+        const reset = structChanged || colorChanged || prev.length !== engine.slides.length;
+        const next = reset
+          ? Array<string>(engine.slides.length).fill("")
+          : prev.slice();
+
+        // 画面外へ出たページの巨大な srcDoc は保持せず、再び見えた時に生成し直す。
+        for (let i = 0; i < next.length; i++) {
+          if (!visible.has(i)) next[i] = "";
         }
-        // 通常編集は「今触っているスライド」の分だけ差し替える
-        const next = prev.slice();
-        next[engine.current] = build(engine.current);
+
+        for (const i of visible) {
+          if (i < 0 || i >= next.length) continue;
+          if (reset || !next[i] || i === engine.current) next[i] = engine.serializeSlide(i);
+        }
         return next;
       });
     }, THUMB_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [engine, version]);
+  }, [engine, version, visible]);
 
   // 画面内（±300px）に入っているサムネイルだけ iframe を持たせる
   useEffect(() => {

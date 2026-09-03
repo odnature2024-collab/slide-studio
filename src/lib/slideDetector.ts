@@ -1,7 +1,10 @@
 // 読み込んだ HTML からスライド要素群を検出するヒューリスティック
 
 export interface SlideDetection {
+  /** 表示・並べ替え・複製・削除の単位になる、最も外側のページルート */
   slides: HTMLElement[];
+  /** 状態クラス（active/current 等）を付け替える元のスライド要素 */
+  stateTargets: HTMLElement[];
   /** 検出方法の説明（UI 表示用） */
   method: string;
   /** 検出に自信があるか（低いときは UI で注意表示） */
@@ -39,16 +42,86 @@ function classSignature(el: Element): string {
   return `${el.tagName}.${Array.from(el.classList).sort().join(".")}`;
 }
 
+/** class / id がページを包む要素らしいか */
+function hasPageWrapperName(el: HTMLElement): boolean {
+  const name = `${el.id} ${typeof el.className === "string" ? el.className : ""}`;
+  return /(^|[\s_-])(slide|page)([\s_-]|$)|slide|page/i.test(name);
+}
+
+/**
+ * `.slide-wrap > .slide` のように、検出したスライドが一対一の反復ラッパーに
+ * 入っている場合は外側をページルートにする。
+ *
+ * 内側だけを非表示にすると、外側の高さ・余白が残って2枚目以降が iframe の
+ * 表示領域外へ押し出される。全候補が別々の兄弟ラッパーに一対一で入っている
+ * 場合だけ昇格するため、単なる共通コンテナまでは巻き込まない。
+ */
+function promotePageRoots(slides: HTMLElement[]): {
+  roots: HTMLElement[];
+  label: string | null;
+} {
+  if (slides.length < 2) return { roots: slides, label: null };
+
+  let roots = slides.slice();
+  let promoted: HTMLElement[] | null = null;
+
+  while (true) {
+    const parents = roots.map((el) => el.parentElement);
+    if (parents.some((el) => !el || el.tagName === "BODY" || el.tagName === "HTML")) break;
+
+    const wrappers = parents as HTMLElement[];
+    if (new Set(wrappers).size !== slides.length) break;
+    const commonParent = wrappers[0].parentElement;
+    if (!commonParent || !wrappers.every((el) => el.parentElement === commonParent)) break;
+
+    // 各ラッパーが元候補をちょうど1つだけ含むことが昇格の必須条件。
+    if (!wrappers.every((wrapper) => slides.filter((slide) => wrapper.contains(slide)).length === 1)) {
+      break;
+    }
+
+    // 明示的な slide/page 系ラッパー、または子要素が候補1つだけの薄いラッパーを許可。
+    const wrapperLike = wrappers.every(
+      (wrapper) => hasPageWrapperName(wrapper) || elementChildren(wrapper).length === 1
+    );
+    if (!wrapperLike) break;
+
+    promoted = wrappers;
+    roots = wrappers;
+  }
+
+  if (!promoted) return { roots: slides, label: null };
+  const first = promoted[0];
+  const cls = Array.from(first.classList).find((name) => /slide|page/i.test(name));
+  const label = cls ? `.${cls}` : first.tagName.toLowerCase();
+  return { roots: promoted, label };
+}
+
+function result(
+  stateTargets: HTMLElement[],
+  method: string,
+  confident: boolean
+): SlideDetection {
+  const promoted = promotePageRoots(stateTargets);
+  return {
+    slides: promoted.roots,
+    stateTargets,
+    method: promoted.label ? `${method} → 外側 ${promoted.label}` : method,
+    confident,
+  };
+}
+
 export function detectSlides(doc: Document): SlideDetection {
   const body = doc.body;
-  if (!body) return { slides: [], method: "body なし", confident: false };
+  if (!body) {
+    return { slides: [], stateTargets: [], method: "body なし", confident: false };
+  }
 
   // 1. `.slide` クラス（AI 生成スライドの定番）
   const byClass = topLevelOnly(
     Array.from(doc.querySelectorAll<HTMLElement>(".slide")).filter(isElement)
   );
   if (byClass.length >= 1) {
-    return { slides: byClass, method: ".slide クラス", confident: true };
+    return result(byClass, ".slide クラス", true);
   }
 
   // 2. トップレベルの <section> が 2 つ以上（reveal.js 等）
@@ -56,7 +129,7 @@ export function detectSlides(doc: Document): SlideDetection {
     Array.from(doc.querySelectorAll<HTMLElement>("section")).filter(isElement)
   );
   if (sections.length >= 2) {
-    return { slides: sections, method: "<section> 要素", confident: true };
+    return result(sections, "<section> 要素", true);
   }
 
   // 3. クラス名に slide / page を含む要素
@@ -66,7 +139,7 @@ export function detectSlides(doc: Document): SlideDetection {
     )
   );
   if (byName.length >= 2) {
-    return { slides: byName, method: "クラス名（slide / page）", confident: true };
+    return result(byName, "クラス名（slide / page）", true);
   }
 
   // 4. 同じ構造の兄弟要素グループ（body から 3 階層まで探索）
@@ -90,7 +163,7 @@ export function detectSlides(doc: Document): SlideDetection {
     }
   }
   if (best.length >= 2) {
-    return { slides: best, method: "同じ構造の兄弟要素", confident: false };
+    return result(best, "同じ構造の兄弟要素", false);
   }
 
   // 5. フォールバック: body 直下の要素、それも無ければ body 全体を 1 枚のスライドとして扱う
@@ -99,7 +172,7 @@ export function detectSlides(doc: Document): SlideDetection {
     return true;
   });
   if (bodyChildren.length >= 1) {
-    return { slides: bodyChildren, method: "body 直下の要素", confident: bodyChildren.length === 1 };
+    return result(bodyChildren, "body 直下の要素", bodyChildren.length === 1);
   }
-  return { slides: [body as HTMLElement], method: "body 全体", confident: false };
+  return result([body as HTMLElement], "body 全体", false);
 }

@@ -45,7 +45,7 @@ export default function Toolbar({ engine, shapeFill, onPresent }: Props) {
   const handleExportPdf = async () => {
     engine.finishEditing();
     await exportPdf({
-      html: engine.serialize(true),
+      getSlideHtml: (index) => engine.serializeSlide(index),
       slideCount: engine.slides.length,
       width: engine.slideSize.width,
       height: engine.slideSize.height,

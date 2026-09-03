@@ -1,12 +1,12 @@
 // PDF 書き出し：スライドごとの iframe を1ページずつ並べた印刷用ドキュメントを
 // 非表示 iframe に組み立て、ブラウザの印刷ダイアログ（「PDF に保存」）を開く。
-// サムネイル・プレゼンと同じ「serialize(true) + onlySlideCss」方式なので見た目が一致する。
+// サムネイル・プレゼンと同じページ別HTMLを使うため、巨大な全デッキをページ数分複製しない。
 
-import { injectStyleIntoHtml, onlySlideCss } from "./editorDoc";
+import { injectStyleIntoHtml } from "./editorDoc";
 
 export interface PdfExportOptions {
-  /** serialize(true) — スライド連番マーク付きの HTML */
-  html: string;
+  /** 指定ページだけ内容を持つ軽量なプレビューHTMLを返す */
+  getSlideHtml: (index: number) => string;
   slideCount: number;
   width: number;
   height: number;
@@ -43,7 +43,7 @@ function waitForFrame(frame: HTMLIFrameElement): Promise<void> {
 }
 
 export async function exportPdf(options: PdfExportOptions): Promise<void> {
-  const { html, slideCount, width, height, title } = options;
+  const { getSlideHtml, slideCount, width, height, title } = options;
   if (slideCount === 0) return;
 
   // 印刷用ドキュメントを入れる非表示ホスト（display:none だと印刷できないため opacity で隠す）
@@ -73,7 +73,7 @@ html, body { margin: 0; padding: 0; }
       const frame = doc.createElement("iframe");
       frame.setAttribute("sandbox", "allow-same-origin");
       waits.push(waitForFrame(frame));
-      frame.srcdoc = injectStyleIntoHtml(html, onlySlideCss(i) + PRINT_COLOR_CSS);
+      frame.srcdoc = injectStyleIntoHtml(getSlideHtml(i), PRINT_COLOR_CSS);
       page.appendChild(frame);
       doc.body.appendChild(page);
     }

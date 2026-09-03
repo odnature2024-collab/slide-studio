@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   detectStateClass,
+  inferSlideDisplays,
   setActiveSlide,
   serializeDocument,
   markSlides,
+  onlySlideCss,
   syncCounterAttributes,
   SLIDE_ATTR,
 } from "./editorDoc";
@@ -91,6 +93,91 @@ describe("setActiveSlide + serializeDocument の状態クラス処理", () => {
     const previewSlides = slidesOf(preview);
     expect(previewSlides.every((s) => s.classList.contains("active"))).toBe(true);
     expect(previewSlides.every((s) => s.hasAttribute(SLIDE_ATTR))).toBe(true);
+  });
+});
+
+describe("ページ表示の互換処理", () => {
+  it("inline display:none のページは表示中ページの display から補完する", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `<main>
+      <div class="slide" style="display:flex">1</div>
+      <div class="slide" style="display:none">2</div>
+      <div class="slide" style="display:none">3</div>
+    </main>`;
+    document.body.appendChild(host);
+    const slides = Array.from(host.querySelectorAll<HTMLElement>(".slide"));
+    expect(inferSlideDisplays(document, slides)).toEqual(["flex", "flex", "flex"]);
+    expect(onlySlideCss(1, { activeDisplay: "flex" })).toContain("display: flex !important");
+    host.remove();
+  });
+
+  it("ラッパーと内側の状態クラス対象を別々に切り替える", () => {
+    const doc = buildDoc(`<style>.slide{display:none}.slide.current{display:grid}</style><main>
+      <div class="slide-wrap"><section class="slide current">1</section></div>
+      <div class="slide-wrap"><section class="slide">2</section></div>
+    </main>`);
+    const roots = Array.from(doc.querySelectorAll<HTMLElement>(".slide-wrap"));
+    const targets = slidesOf(doc);
+    const state = detectStateClass(doc, targets)!;
+    markSlides(doc, roots, targets);
+    setActiveSlide(roots, 1, state, targets);
+    expect(roots.map((el) => el.hasAttribute("data-hse-hidden"))).toEqual([true, false]);
+    expect(targets.map((el) => el.classList.contains("current"))).toEqual([false, true]);
+  });
+
+  it("ラッパー内側の inline display:none も表示用CSSで補正する", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `<main>
+      <div class="slide-wrap"><section class="slide" style="display:grid">1</section></div>
+      <div class="slide-wrap"><section class="slide" style="display:none">2</section></div>
+    </main>`;
+    document.body.appendChild(host);
+    const roots = Array.from(host.querySelectorAll<HTMLElement>(".slide-wrap"));
+    const targets = Array.from(host.querySelectorAll<HTMLElement>(".slide"));
+    markSlides(document, roots, targets);
+    const rootDisplays = inferSlideDisplays(document, roots, targets);
+    const targetDisplays = inferSlideDisplays(document, targets);
+    expect(targetDisplays).toEqual(["grid", "grid"]);
+    expect(
+      onlySlideCss(1, {
+        activeDisplay: rootDisplays[1],
+        activeTargetDisplay: targetDisplays[1],
+      })
+    ).toContain('[data-hse-state-target="1"] { display: grid !important');
+    host.remove();
+  });
+});
+
+describe("ページ別シリアライズ", () => {
+  it("非対象ページの本文・Base64・スクリプトを除き、兄弟の殻を残す", () => {
+    const doc = buildDoc(`<!DOCTYPE html><html><head><style>.slide-wrap{display:block}</style></head><body>
+      <main class="deck">
+        <div class="slide-wrap" id="slide-1"><section class="slide"><img src="data:image/png;base64,AAA">one</section></div>
+        <div class="slide-wrap" id="slide-2"><section class="slide"><img src="data:image/png;base64,BBB">two</section></div>
+        <div class="slide-wrap" id="slide-3"><section class="slide"><img src="data:image/png;base64,CCC">three</section></div>
+      </main><script>window.largePayload = "SHOULD_NOT_RUN"</script>
+    </body></html>`);
+    const roots = Array.from(doc.querySelectorAll<HTMLElement>(".slide-wrap"));
+    const targets = slidesOf(doc);
+    markSlides(doc, roots, targets);
+
+    const html = serializeDocument(doc, {
+      keepSlideMarks: true,
+      stateMode: "single",
+      activeIndex: 1,
+      pruneToSlide: 1,
+    });
+    const preview = buildDoc(html);
+    const previewRoots = Array.from(preview.querySelectorAll<HTMLElement>(`[${SLIDE_ATTR}]`));
+    expect(previewRoots).toHaveLength(3);
+    expect(previewRoots[0].children).toHaveLength(0);
+    expect(previewRoots[1].textContent).toContain("two");
+    expect(previewRoots[2].children).toHaveLength(0);
+    expect(html).not.toContain("base64,AAA");
+    expect(html).toContain("base64,BBB");
+    expect(html).not.toContain("base64,CCC");
+    expect(html).not.toContain("SHOULD_NOT_RUN");
+    expect(previewRoots.map((el) => el.id)).toEqual(["slide-1", "slide-2", "slide-3"]);
   });
 });
 

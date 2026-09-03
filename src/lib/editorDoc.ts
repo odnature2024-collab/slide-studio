@@ -1,7 +1,9 @@
 // 編集用に iframe 内ドキュメントへ注入する属性・スタイルの管理と、保存用シリアライズ
 
 export const EDITOR_STYLE_ID = "hse-editor-style";
+export const SLIDE_DISPLAY_STYLE_ID = "hse-slide-display-style";
 export const SLIDE_ATTR = "data-hse-slide";
+export const STATE_TARGET_ATTR = "data-hse-state-target";
 export const HIDDEN_ATTR = "data-hse-hidden";
 export const SELECTED_ATTR = "data-hse-selected";
 /** スライド外の固定 UI（デッキ自身のページ送りボタン等）を編集・プレビューで隠すマーク */
@@ -51,12 +53,20 @@ body { cursor: default; }
   (doc.head ?? doc.documentElement).appendChild(style);
 }
 
-/** スライド要素に連番マークを付ける */
-export function markSlides(doc: Document, slides: HTMLElement[]): void {
+/** スライド要素と状態クラス対象に連番マークを付ける */
+export function markSlides(
+  doc: Document,
+  slides: HTMLElement[],
+  stateTargets: HTMLElement[] = slides
+): void {
   for (const el of Array.from(doc.querySelectorAll(`[${SLIDE_ATTR}]`))) {
     el.removeAttribute(SLIDE_ATTR);
   }
+  for (const el of Array.from(doc.querySelectorAll(`[${STATE_TARGET_ATTR}]`))) {
+    el.removeAttribute(STATE_TARGET_ATTR);
+  }
   slides.forEach((el, i) => el.setAttribute(SLIDE_ATTR, String(i)));
+  stateTargets.forEach((el, i) => el.setAttribute(STATE_TARGET_ATTR, String(i)));
 }
 
 /** JS 制御のプレゼンでよく使われる「表示中」を表すクラス名の候補 */
@@ -67,6 +77,100 @@ export interface SlideStateClass {
   className: string;
   /** 読み込み時点でこのクラスを持っていたスライドのインデックス（保存時に復元する） */
   originalHolders: number[];
+}
+
+function validDisplay(value: string | null | undefined): string | null {
+  if (!value || value === "none" || !/^[a-z-]+$/i.test(value)) return null;
+  return value;
+}
+
+function displaySignature(el: HTMLElement, stateClass: SlideStateClass | null): string {
+  const classes = Array.from(el.classList)
+    .filter((name) => name !== stateClass?.className)
+    .sort()
+    .join(".");
+  return `${el.tagName}.${classes}`;
+}
+
+function defaultDisplay(el: HTMLElement): string {
+  switch (el.tagName) {
+    case "TR":
+      return "table-row";
+    case "TD":
+    case "TH":
+      return "table-cell";
+    case "LI":
+      return "list-item";
+    default:
+      return "block";
+  }
+}
+
+/**
+ * 各ページが表示中に使う display 値を求める。
+ * 状態クラスを一時的にページごとへ付け替えて計測し、それでも display:none の
+ * ページ（JS が inline style を切り替える形式）は同じ構造の表示中ページから補完する。
+ */
+export function inferSlideDisplays(
+  doc: Document,
+  slides: HTMLElement[],
+  stateTargets: HTMLElement[] = slides,
+  stateClass: SlideStateClass | null = null
+): string[] {
+  const win = doc.defaultView;
+  if (!win) return slides.map(defaultDisplay);
+
+  const originals = stateClass
+    ? stateTargets.map((el) => el.classList.contains(stateClass.className))
+    : [];
+  const measured: Array<string | null> = [];
+
+  try {
+    for (let i = 0; i < slides.length; i++) {
+      if (stateClass) {
+        stateTargets.forEach((el, j) => el.classList.toggle(stateClass.className, i === j));
+      }
+      measured.push(validDisplay(win.getComputedStyle(slides[i]).display));
+    }
+  } finally {
+    if (stateClass) {
+      stateTargets.forEach((el, i) =>
+        el.classList.toggle(stateClass.className, originals[i] ?? false)
+      );
+    }
+  }
+
+  const firstVisible = measured.find((value): value is string => value != null) ?? null;
+  return measured.map((value, i) => {
+    if (value) return value;
+    const sig = displaySignature(slides[i], stateClass);
+    const peer = measured.find(
+      (candidate, j) => candidate && displaySignature(slides[j], stateClass) === sig
+    );
+    return peer ?? firstVisible ?? defaultDisplay(slides[i]);
+  });
+}
+
+/** 編集中だけ、現在ページへ元のレイアウト種別を保った display を強制する */
+export function injectSlideDisplayStyles(
+  doc: Document,
+  displays: string[],
+  stateTargetDisplays: string[] = displays
+): void {
+  doc.getElementById(SLIDE_DISPLAY_STYLE_ID)?.remove();
+  const style = doc.createElement("style");
+  style.id = SLIDE_DISPLAY_STYLE_ID;
+  style.textContent = displays
+    .flatMap((display, i) => [
+      `[${SLIDE_ATTR}="${i}"]:not([${HIDDEN_ATTR}]) { display: ${
+        validDisplay(display) ?? "block"
+      } !important; }`,
+      `[${STATE_TARGET_ATTR}="${i}"] { display: ${
+        validDisplay(stateTargetDisplays[i]) ?? "block"
+      } !important; }`,
+    ])
+    .join("\n");
+  (doc.head ?? doc.documentElement).appendChild(style);
 }
 
 /**
@@ -151,13 +255,16 @@ export function detectStateClass(doc: Document, slides: HTMLElement[]): SlideSta
 export function setActiveSlide(
   slides: HTMLElement[],
   index: number,
-  stateClass: SlideStateClass | null = null
+  stateClass: SlideStateClass | null = null,
+  stateTargets: HTMLElement[] = slides
 ): void {
   slides.forEach((el, i) => {
     if (i === index) el.removeAttribute(HIDDEN_ATTR);
     else el.setAttribute(HIDDEN_ATTR, "");
-    if (stateClass) el.classList.toggle(stateClass.className, i === index);
   });
+  if (stateClass) {
+    stateTargets.forEach((el, i) => el.classList.toggle(stateClass.className, i === index));
+  }
 }
 
 export interface SerializeOptions {
@@ -169,7 +276,28 @@ export interface SerializeOptions {
    * "original": 読み込み時のスライドに付け直す（保存用）
    * "all": 全スライドに付ける（サムネイル・プレビュー用。1枚ずつ表示するため）
    */
-  stateMode?: "original" | "all";
+  stateMode?: "original" | "all" | "single";
+  /** stateMode: "single" で状態クラスを付けるページ */
+  activeIndex?: number;
+  /** 指定ページ以外を軽量なプレースホルダーへ置き換える（プレビュー用） */
+  pruneToSlide?: number;
+}
+
+/** 非表示ページをCSSセレクタ用の最小限の殻だけにする */
+function compactSlidePlaceholder(el: Element): void {
+  el.replaceChildren();
+  for (const attr of Array.from(el.attributes)) {
+    const keep =
+      attr.name === "id" ||
+      attr.name === "class" ||
+      attr.name === SLIDE_ATTR ||
+      attr.name === STATE_TARGET_ATTR ||
+      (attr.name.startsWith("data-") &&
+        !attr.name.startsWith("data-hse-") &&
+        attr.value.length <= 256 &&
+        !attr.value.trimStart().startsWith("data:"));
+    if (!keep) el.removeAttribute(attr.name);
+  }
 }
 
 /**
@@ -179,18 +307,37 @@ export interface SerializeOptions {
 export function serializeDocument(doc: Document, options: SerializeOptions = {}): string {
   const root = doc.documentElement.cloneNode(true) as HTMLElement;
   root.querySelector(`#${EDITOR_STYLE_ID}`)?.remove();
+  root.querySelector(`#${SLIDE_DISPLAY_STYLE_ID}`)?.remove();
   for (const el of Array.from(root.querySelectorAll("[contenteditable]"))) {
     el.removeAttribute("contenteditable");
   }
   // 状態クラスを編集中の状態から本来あるべき状態へ戻す
   if (options.stateClass) {
     const { className, originalHolders } = options.stateClass;
-    const slideEls = Array.from(root.querySelectorAll(`[${SLIDE_ATTR}]`));
+    const markedTargets = Array.from(root.querySelectorAll(`[${STATE_TARGET_ATTR}]`));
+    const slideEls =
+      markedTargets.length > 0
+        ? markedTargets
+        : Array.from(root.querySelectorAll(`[${SLIDE_ATTR}]`));
     slideEls.forEach((el, i) => {
       if (options.stateMode === "all") el.classList.add(className);
+      else if (options.stateMode === "single") {
+        el.classList.toggle(className, i === options.activeIndex);
+      }
       else el.classList.toggle(className, originalHolders.includes(i));
     });
   }
+
+  if (options.pruneToSlide != null) {
+    const slideEls = Array.from(root.querySelectorAll(`[${SLIDE_ATTR}]`));
+    slideEls.forEach((el, i) => {
+      if (i !== options.pruneToSlide) compactSlidePlaceholder(el);
+    });
+    // プレビュー iframe ではスクリプトを実行しないため、本文を持たせる必要もない。
+    for (const el of Array.from(root.querySelectorAll("script, template, noscript"))) el.remove();
+    for (const el of Array.from(root.querySelectorAll(`[${CHROME_ATTR}]`))) el.remove();
+  }
+
   const all = [root, ...Array.from(root.querySelectorAll("*"))];
   for (const el of all) {
     for (const attr of Array.from(el.attributes)) {
@@ -261,11 +408,21 @@ export function injectStyleIntoHtml(html: string, css: string, id?: string): str
   return tag + html;
 }
 
-/** i 番目のスライドだけを表示する CSS（元の display 値には触れない） */
-export function onlySlideCss(index: number, options: { instantAnimation?: boolean } = {}): string {
+/** i 番目のスライドだけを、本来のレイアウト種別を保って表示する CSS */
+export function onlySlideCss(
+  index: number,
+  options: {
+    instantAnimation?: boolean;
+    activeDisplay?: string;
+    activeTargetDisplay?: string;
+  } = {}
+): string {
+  const activeDisplay = validDisplay(options.activeDisplay) ?? "block";
+  const activeTargetDisplay = validDisplay(options.activeTargetDisplay) ?? activeDisplay;
   return `
 [${SLIDE_ATTR}]:not([${SLIDE_ATTR}="${index}"]) { display: none !important; }
-[${SLIDE_ATTR}="${index}"] { opacity: 1 !important; visibility: visible !important; }
+[${SLIDE_ATTR}="${index}"] { display: ${activeDisplay} !important; opacity: 1 !important; visibility: visible !important; }
+[${STATE_TARGET_ATTR}="${index}"] { display: ${activeTargetDisplay} !important; opacity: 1 !important; visibility: visible !important; }
 [${CHROME_ATTR}] { display: none !important; }
 html, body { overflow: hidden !important; margin: 0 !important; background: transparent; }
 ${options.instantAnimation === false ? "" : INSTANT_ANIMATION_CSS}
