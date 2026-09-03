@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   detectStateClass,
   inferSlideDisplays,
+  injectSlideDisplayStyles,
   setActiveSlide,
   serializeDocument,
   markSlides,
@@ -108,6 +109,24 @@ describe("ページ表示の互換処理", () => {
     const slides = Array.from(host.querySelectorAll<HTMLElement>(".slide"));
     expect(inferSlideDisplays(document, slides)).toEqual(["flex", "flex", "flex"]);
     expect(onlySlideCss(1, { activeDisplay: "flex" })).toContain("display: flex !important");
+    host.remove();
+  });
+
+  it("直接配置の非表示ページは状態対象の補正で再表示されない", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `<main>
+      <div class="slide" style="display:flex">1</div>
+      <div class="slide" style="display:none">2</div>
+    </main>`;
+    document.body.appendChild(host);
+    const slides = Array.from(host.querySelectorAll<HTMLElement>(".slide"));
+    markSlides(document, slides, slides);
+    const displays = inferSlideDisplays(document, slides);
+    injectSlideDisplayStyles(document, displays, displays);
+    setActiveSlide(slides, 0);
+    expect(getComputedStyle(slides[0]).display).toBe("flex");
+    expect(getComputedStyle(slides[1]).display).toBe("none");
+    document.getElementById("hse-slide-display-style")?.remove();
     host.remove();
   });
 

@@ -165,7 +165,7 @@ export function injectSlideDisplayStyles(
       `[${SLIDE_ATTR}="${i}"]:not([${HIDDEN_ATTR}]) { display: ${
         validDisplay(display) ?? "block"
       } !important; }`,
-      `[${STATE_TARGET_ATTR}="${i}"] { display: ${
+      `[${STATE_TARGET_ATTR}="${i}"]:not([${SLIDE_ATTR}]) { display: ${
         validDisplay(stateTargetDisplays[i]) ?? "block"
       } !important; }`,
     ])
